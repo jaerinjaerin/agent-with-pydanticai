@@ -11,10 +11,15 @@ import sys
 import threading
 from pathlib import Path
 
+import nest_asyncio
 import streamlit as st
 
-# Streamlit(uvloop) 환경에서 TCP 연결이 유지되도록 별도 스레드에 영구 이벤트 루프 운영
+# 중첩 이벤트 루프 허용 (Streamlit Cloud uvloop 환경 포함)
+nest_asyncio.apply()
+
+# 별도 스레드에 영구 이벤트 루프 운영
 _bg_loop = asyncio.new_event_loop()
+nest_asyncio.apply(_bg_loop)
 _bg_thread = threading.Thread(target=_bg_loop.run_forever, daemon=True)
 _bg_thread.start()
 

@@ -29,15 +29,9 @@ try:
 except Exception:
     pass
 
-# uvloop 환경(Streamlit 등)에서는 nest_asyncio가 호환되지 않으므로 건너뛴다.
-try:
-    import uvloop  # noqa: F401
-    _has_uvloop = True
-except ImportError:
-    _has_uvloop = False
-
-if not _has_uvloop:
-    nest_asyncio.apply()
+# nest_asyncio를 적용하여 중첩 이벤트 루프를 허용한다.
+# Streamlit Cloud(uvloop) 환경에서도 적용해야 pydantic-ai가 정상 동작한다.
+nest_asyncio.apply()
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 FAQ_DATA_PATH = DATA_DIR / "faq_lineworks.json"
