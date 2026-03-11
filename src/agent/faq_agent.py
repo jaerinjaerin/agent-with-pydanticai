@@ -186,7 +186,7 @@ def get_data_stats(ctx: RunContext[FAQDatabase]) -> str:
     )
 
 
-model = GoogleModel("gemini-2.0-flash")
+model = GoogleModel("gemini-2.5-flash")
 
 faq_agent = Agent(
     model=model,
