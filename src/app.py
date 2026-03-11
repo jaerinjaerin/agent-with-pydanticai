@@ -23,13 +23,11 @@ def _patched_sniffio():
         return "asyncio"
 sniffio.current_async_library = _patched_sniffio
 
-import nest_asyncio
 import streamlit as st
 
-# Streamlit Cloud는 uvloop을 사용하는데, nest_asyncio는 uvloop을 패치할 수 없다.
-# 따라서 표준 asyncio 루프를 백그라운드 스레드에서 별도로 운영한다.
+# 표준 asyncio 루프를 백그라운드 스레드에서 운영한다.
+# uvloop(Streamlit Cloud)과 완전히 분리된 별도 루프이므로 nest_asyncio 불필요.
 _bg_loop = asyncio.DefaultEventLoopPolicy().new_event_loop()
-nest_asyncio.apply(_bg_loop)
 
 
 def _run_loop():
