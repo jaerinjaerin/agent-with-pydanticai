@@ -6,10 +6,23 @@ PydanticAI 에이전트를 활용한 대화형 FAQ 챗봇 인터페이스.
 """
 
 import asyncio
+import re
 import sys
+import threading
 from pathlib import Path
 
 import streamlit as st
+
+# Streamlit(uvloop) 환경에서 TCP 연결이 유지되도록 별도 스레드에 영구 이벤트 루프 운영
+_bg_loop = asyncio.new_event_loop()
+_bg_thread = threading.Thread(target=_bg_loop.run_forever, daemon=True)
+_bg_thread.start()
+
+
+def run_async(coro):
+    """영구 이벤트 루프에서 코루틴을 실행한다. TCP 연결이 루프와 함께 유지된다."""
+    future = asyncio.run_coroutine_threadsafe(coro, _bg_loop)
+    return future.result()
 
 # src 디렉토리를 path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -86,6 +99,10 @@ section[data-testid="stSidebar"] { display: none; }
 .badge-board {
     background: #e3f2fd;
     color: #1565c0;
+}
+.badge-eluocnc {
+    background: #fce4ec;
+    color: #c62828;
 }
 
 /* 유사도 바 */
@@ -167,15 +184,89 @@ section[data-testid="stSidebar"] { display: none; }
 
 /* 자동 스크롤 방지 */
 [data-testid="ScrollToBottomContainer"] { display: none !important; }
-[data-testid="stChatMessageContainer"] { overflow-anchor: none !important; }
-[data-testid="stExpander"] { overflow-anchor: none !important; }
-.stApp [data-testid="stAppViewContainer"] > section > div { overflow-anchor: none !important; }
-.main .block-container { overflow-anchor: none !important; }
+[data-testid="stChatMessageContainer"] {
+    overflow-anchor: none !important;
+    scroll-behavior: auto !important;
+}
+.stApp, .stApp * {
+    scroll-behavior: auto !important;
+    scroll-margin: 0 !important;
+    scroll-padding: 0 !important;
+}
+/* expander 열릴 때 스크롤 이동 방지 */
+[data-testid="stExpander"],
+[data-testid="stExpander"] * {
+    scroll-margin-top: 0 !important;
+    scroll-margin-bottom: 0 !important;
+    scroll-snap-align: none !important;
+}
+[data-testid="stExpanderDetails"] {
+    overflow-anchor: none !important;
+}
+
+/* 참고자료 expander 컴팩트 스타일 */
+.ref-expander [data-testid="stExpander"] {
+    border: 1px solid #e9e9e7;
+    border-radius: 8px;
+    margin-top: 8px;
+}
+.ref-expander [data-testid="stExpanderDetails"] {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* 참고자료 카드 컴팩트 */
+.ref-card {
+    padding: 10px 14px !important;
+    margin-bottom: 6px !important;
+}
+.ref-title { font-size: 0.85rem !important; }
+.ref-content {
+    font-size: 0.8rem !important;
+    -webkit-line-clamp: 2 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("💬 엘루오 도우미")
 st.caption("FAQ 및 사내 규정/업무가이드 관련 질문을 입력해주세요.")
+
+# 자동 스크롤 방지 JS — 프로그래밍적 스크롤을 완전 차단하고 사용자 입력만 허용
+st.markdown("""
+<script>
+(function() {
+    if (window.__scrollLockApplied) return;
+    window.__scrollLockApplied = true;
+
+    // 사용자가 직접 스크롤할 때만 허용 플래그
+    let userInitiated = false;
+    ['wheel', 'touchmove', 'touchstart', 'keydown', 'mousedown'].forEach(evt => {
+        window.addEventListener(evt, () => {
+            userInitiated = true;
+            setTimeout(() => { userInitiated = false; }, 300);
+        }, { capture: true, passive: true });
+    });
+
+    // window.scrollTo / window.scroll 차단
+    const _scrollTo = window.scrollTo.bind(window);
+    window.scrollTo = function(...args) {
+        if (userInitiated) _scrollTo(...args);
+    };
+    window.scroll = function(...args) {
+        if (userInitiated) _scrollTo(...args);
+    };
+
+    // Element.scrollIntoView 차단
+    Element.prototype.scrollIntoView = function() {};
+
+    // ScrollToBottom 버튼 제거
+    new MutationObserver(function() {
+        document.querySelectorAll('[data-testid="ScrollToBottomContainer"]')
+            .forEach(el => el.remove());
+    }).observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+""", unsafe_allow_html=True)
 
 
 @st.cache_resource
@@ -189,11 +280,13 @@ try:
     faq_db = load_faq_db()
     faq_count = sum(1 for item in faq_db.items if item.get("source", "faq") == "faq")
     board_count = sum(1 for item in faq_db.items if item.get("source") == "board")
+    eluocnc_count = sum(1 for item in faq_db.items if item.get("source") == "eluocnc")
     st.markdown(f"""
     <div class="data-status">
         <span>✅ 데이터 로드 완료</span>
         <span class="status-item">📄 FAQ <span class="status-count">{faq_count}</span>개</span>
         <span class="status-item">📋 게시판 <span class="status-count">{board_count}</span>개</span>
+        <span class="status-item">🏢 홈페이지 <span class="status-count">{eluocnc_count}</span>개</span>
         <span class="status-item">총 <span class="status-count">{len(faq_db.items)}</span>개</span>
     </div>
     """, unsafe_allow_html=True)
@@ -216,6 +309,37 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "pydantic_history" not in st.session_state:
     st.session_state.pydantic_history = []
+if "pending_selection" not in st.session_state:
+    st.session_state.pending_selection = None
+
+
+def parse_choices(text: str) -> list[str]:
+    """에이전트 답변에서 번호 목록 선택지를 추출한다.
+
+    '1. 항목', '1) 항목', '- 항목' 패턴을 인식하며,
+    선택을 요청하는 문맥이 있을 때만 추출한다.
+    """
+    # 선택을 유도하는 키워드가 없으면 무시
+    choice_keywords = ["선택", "어떤", "골라", "알려주세요", "원하시", "궁금"]
+    if not any(kw in text for kw in choice_keywords):
+        return []
+
+    # 번호 목록 추출: "1. ...", "1) ...", "- ..." 등
+    patterns = [
+        r'^\s*\d+[.)]\s*(.+)$',       # 1. 또는 1)
+        r'^\s*[-*]\s*\*?\*?(.+?)(?:\*?\*?)$',  # - 또는 * (볼드 마크다운 제거)
+    ]
+    choices = []
+    for line in text.split("\n"):
+        for pat in patterns:
+            m = re.match(pat, line.strip())
+            if m:
+                item = m.group(1).strip().strip("*").strip()
+                if item and len(item) > 2:
+                    choices.append(item)
+                break
+
+    return choices if len(choices) >= 2 else []
 
 
 def resolve_image_path(img_path: str) -> Path:
@@ -229,8 +353,12 @@ def resolve_image_path(img_path: str) -> Path:
 def render_ref_card(r: dict):
     """검색 결과를 노션 스타일 카드로 렌더링한다."""
     source = r.get("source", "faq")
-    badge_class = "badge-faq" if source == "faq" else "badge-board"
-    badge_label = "FAQ" if source == "faq" else "게시판"
+    badge_map = {
+        "faq": ("badge-faq", "FAQ"),
+        "board": ("badge-board", "게시판"),
+        "eluocnc": ("badge-eluocnc", "홈페이지"),
+    }
+    badge_class, badge_label = badge_map.get(source, ("badge-faq", source))
     score = r.get("score", 0)
     score_pct = min(int(score * 100), 100)
     content_preview = r.get("content", "")[:200].replace("\n", " ")
@@ -252,24 +380,22 @@ def render_ref_card(r: dict):
 
 
 def render_ref_panel(search_results: list[dict]):
-    """검색 결과 패널을 렌더링한다."""
+    """검색 결과 패널을 접을 수 있는 expander로 렌더링한다."""
     valid = [r for r in search_results if r.get("score", 0) > 0]
     if not valid:
         return
 
-    st.markdown('<hr class="notion-divider">', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">📚 참고 자료</div>', unsafe_allow_html=True)
+    with st.expander(f"📚 참고 자료 ({len(valid)}건)", expanded=False):
+        for r in valid:
+            render_ref_card(r)
 
-    for r in valid:
-        render_ref_card(r)
-
-        # 첨부파일 이미지
-        images = r.get("images", [])
-        existing = [p for p in images if resolve_image_path(p).exists()]
-        if existing:
-            with st.expander(f"📎 첨부파일 이미지 ({len(existing)}장)"):
-                for img_path in existing:
-                    st.image(str(resolve_image_path(img_path)))
+            # 첨부파일 이미지
+            images = r.get("images", [])
+            existing = [p for p in images if resolve_image_path(p).exists()]
+            if existing:
+                with st.expander(f"📎 첨부파일 이미지 ({len(existing)}장)"):
+                    for img_path in existing:
+                        st.image(str(resolve_image_path(img_path)))
 
 
 def render_images_from_history(image_groups: list[dict]):
@@ -285,7 +411,7 @@ def render_images_from_history(image_groups: list[dict]):
 
 
 # 대화 히스토리 표시
-for msg in st.session_state.messages:
+for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg["role"] == "assistant":
@@ -294,10 +420,39 @@ for msg in st.session_state.messages:
                 render_ref_panel(msg["references"])
             elif msg.get("images"):
                 render_images_from_history(msg["images"])
+            # 선택지가 있었던 메시지 (마지막 assistant 메시지만 selectbox 표시)
+            if msg.get("choices") and idx == len(st.session_state.messages) - 1:
+                choices = msg["choices"]
+                selected = st.selectbox(
+                    "항목을 선택해주세요:",
+                    choices,
+                    key=f"select_{idx}",
+                )
+                if st.button("선택 완료", key=f"btn_{idx}"):
+                    st.session_state.pending_selection = selected
+                    st.rerun()
 
-# 사용자 입력 처리
-if prompt := st.chat_input("질문을 입력하세요..."):
+# 셀렉트박스 선택 처리
+if st.session_state.pending_selection:
+    prompt = f"{st.session_state.pending_selection}에 대해 자세히 알려줘"
+    st.session_state.pending_selection = None
+    # 이전 메시지의 choices 제거 (selectbox 숨김)
+    if st.session_state.messages and st.session_state.messages[-1].get("choices"):
+        st.session_state.messages[-1]["choices"] = None
     st.session_state.messages.append({"role": "user", "content": prompt})
+    _has_input = True
+elif prompt := st.chat_input("질문을 입력하세요..."):
+    _has_input = True
+else:
+    _has_input = False
+
+if _has_input:
+    # pending_selection 경로에서는 이미 append 했으므로 chat_input 경로만 추가
+    if not any(
+        m["role"] == "user" and m["content"] == prompt
+        for m in st.session_state.messages[-1:]
+    ):
+        st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
@@ -319,14 +474,13 @@ if prompt := st.chat_input("질문을 입력하세요..."):
                 return full_text, result.all_messages()
 
         try:
-            loop = asyncio.get_event_loop()
-            answer, all_messages = loop.run_until_complete(
+            answer, all_messages = run_async(
                 _stream(prompt, faq_db, st.session_state.pydantic_history)
             )
             st.session_state.pydantic_history = all_messages
         except Exception:
             try:
-                answer, all_messages = loop.run_until_complete(
+                answer, all_messages = run_async(
                     _stream(prompt, faq_db, None)
                 )
                 st.session_state.pydantic_history = all_messages
@@ -346,9 +500,16 @@ if prompt := st.chat_input("질문을 입력하세요..."):
             if existing:
                 image_groups.append({"title": r["title"], "paths": existing})
 
+        # 선택지 감지
+        choices = parse_choices(answer)
+
     st.session_state.messages.append({
         "role": "assistant",
         "content": answer,
         "references": search_results,
         "images": image_groups,
+        "choices": choices,
     })
+    # 선택지가 있으면 rerun하여 히스토리 루프에서 selectbox 렌더링
+    if choices:
+        st.rerun()

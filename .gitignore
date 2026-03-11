@@ -100,3 +100,8 @@ data/.auth_state.json
 
 # Downloaded board attachments
 data/board_attachments/
+node_modules/
+.next/
+
+# Streamlit secrets (API keys)
+.streamlit/secrets.toml
