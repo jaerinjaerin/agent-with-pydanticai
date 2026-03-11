@@ -24,6 +24,7 @@ def _patched_sniffio():
 sniffio.current_async_library = _patched_sniffio
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
 # 표준 asyncio 루프를 백그라운드 스레드에서 운영한다.
 # uvloop(Streamlit Cloud)과 완전히 분리된 별도 루프이므로 nest_asyncio 불필요.
@@ -41,7 +42,15 @@ _bg_thread.start()
 
 def run_async(coro):
     """백그라운드 표준 asyncio 루프에서 코루틴을 실행한다."""
-    future = asyncio.run_coroutine_threadsafe(coro, _bg_loop)
+    ctx = get_script_run_ctx()
+
+    async def _with_ctx():
+        # 백그라운드 스레드에 Streamlit ScriptRunContext를 전파하여
+        # 'missing ScriptRunContext' 경고를 방지한다.
+        add_script_run_ctx(threading.current_thread(), ctx)
+        return await coro
+
+    future = asyncio.run_coroutine_threadsafe(_with_ctx(), _bg_loop)
     return future.result()
 
 # src 디렉토리를 path에 추가
