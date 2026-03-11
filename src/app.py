@@ -8,39 +8,31 @@ PydanticAI 에이전트를 활용한 대화형 FAQ 챗봇 인터페이스.
 import asyncio
 import re
 import sys
+import threading
 from pathlib import Path
 
 import nest_asyncio
-import sniffio
 import streamlit as st
 
-# Streamlit Cloud(uvloop)에서 sniffio가 비동기 백엔드를 감지하지 못하는 문제 패치
-_sniffio_original = sniffio.current_async_library
-def _patched_sniffio():
-    try:
-        return _sniffio_original()
-    except sniffio.AsyncLibraryNotFoundError:
-        return "asyncio"
-sniffio.current_async_library = _patched_sniffio
+# Streamlit Cloud는 uvloop을 사용하는데, nest_asyncio는 uvloop을 패치할 수 없다.
+# 따라서 표준 asyncio 루프를 백그라운드 스레드에서 별도로 운영한다.
+_bg_loop = asyncio.DefaultEventLoopPolicy().new_event_loop()
+nest_asyncio.apply(_bg_loop)
 
 
-def _get_or_create_loop():
-    """이벤트 루프를 가져오거나 새로 생성하고 nest_asyncio를 적용한다."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            raise RuntimeError
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    nest_asyncio.apply(loop)
-    return loop
+def _run_loop():
+    asyncio.set_event_loop(_bg_loop)
+    _bg_loop.run_forever()
+
+
+_bg_thread = threading.Thread(target=_run_loop, daemon=True)
+_bg_thread.start()
 
 
 def run_async(coro):
-    """이벤트 루프에서 코루틴을 실행한다."""
-    loop = _get_or_create_loop()
-    return loop.run_until_complete(coro)
+    """백그라운드 표준 asyncio 루프에서 코루틴을 실행한다."""
+    future = asyncio.run_coroutine_threadsafe(coro, _bg_loop)
+    return future.result()
 
 # src 디렉토리를 path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent))

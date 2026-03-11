@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import asyncio
-import nest_asyncio
 from dotenv import load_dotenv
 from pydantic_ai import Agent, RunContext, Tool
 from pydantic_ai.models.google import GoogleModel
@@ -29,9 +28,6 @@ try:
 except Exception:
     pass
 
-# nest_asyncio를 적용하여 중첩 이벤트 루프를 허용한다.
-# Streamlit Cloud(uvloop) 환경에서도 적용해야 pydantic-ai가 정상 동작한다.
-nest_asyncio.apply()
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 FAQ_DATA_PATH = DATA_DIR / "faq_lineworks.json"
