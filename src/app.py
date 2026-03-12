@@ -449,10 +449,10 @@ for idx, msg in enumerate(st.session_state.messages):
                 render_ref_panel(msg["references"])
             elif msg.get("images"):
                 render_images_from_history(msg["images"])
-            # 선택지가 있었던 메시지 (마지막 assistant 메시지만 selectbox 표시)
+            # 선택지가 있었던 메시지 (마지막 assistant 메시지만 radio 표시)
             if msg.get("choices") and idx == len(st.session_state.messages) - 1:
                 choices = msg["choices"]
-                selected = st.selectbox(
+                selected = st.radio(
                     "항목을 선택해주세요:",
                     choices,
                     key=f"select_{idx}",
