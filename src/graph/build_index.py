@@ -1,18 +1,14 @@
 """
-Pinecone 벡터 인덱스 + 지식그래프 빌드 스크립트.
+Hybrid RAG 인덱스 빌드 스크립트.
 
-board_lineworks.json + eluocnc.json 데이터를
-임베딩 → 청킹 → Pinecone 업로드 + 엔티티 추출 → 지식그래프 구축.
+JSON 데이터 → 임베딩 + Pinecone 업로드 + 엔티티/관계 추출 + 지식그래프 구축.
 
-Usage:
-    python src/graph/build_index.py              # 전체 빌드
-    python src/graph/build_index.py --pinecone   # Pinecone만
-    python src/graph/build_index.py --graph      # 지식그래프만
+사용법:
+    python src/graph/build_index.py
 """
 
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -24,159 +20,153 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from graph.embedding_index import (
-    chunk_text,
-    embed_documents,
     get_embed_model,
-    get_or_create_index,
+    embed_documents,
     init_pinecone,
-    make_doc_id,
     upsert_vectors,
 )
+from graph.graph_builder import (
+    extract_entities_from_doc,
+    resolve_duplicate_entities,
+    build_networkx_graph,
+    save_graph,
+)
+
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-MIN_CONTENT_LEN = 50
+FAQ_DATA_PATH = DATA_DIR / "faq_lineworks.json"
+BOARD_DATA_PATH = DATA_DIR / "board_lineworks.json"
+ELUOCNC_DATA_PATH = DATA_DIR / "eluocnc.json"
+GRAPH_PATH = DATA_DIR / "knowledge_graph.json"
 
 
-def load_json_data() -> list[dict]:
-    """board + eluocnc JSON 데이터를 로드한다."""
-    files = {
-        "board": DATA_DIR / "board_lineworks.json",
-        "eluocnc": DATA_DIR / "eluocnc.json",
+def load_documents() -> list[dict]:
+    """3개의 JSON 데이터 파일을 로드하고 병합한다."""
+    all_items = []
+    source_map = {
+        FAQ_DATA_PATH: "faq",
+        BOARD_DATA_PATH: "board",
+        ELUOCNC_DATA_PATH: "eluocnc",
     }
 
-    items = []
-    for default_source, path in files.items():
+    for path, default_source in source_map.items():
         if not path.exists():
-            print(f"[warn] 파일 없음 (건너뜀): {path}")
+            print(f"[warn] 데이터 파일 없음 (건너뜀): {path}")
             continue
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        for item in data:
+            items = json.load(f)
+        for item in items:
             item.setdefault("source", default_source)
-        items.extend(data)
-        print(f"  {path.name}: {len(data)}건 로드")
+        all_items.extend(items)
 
-    return items
-
-
-def deduplicate(items: list[dict]) -> list[dict]:
-    """중복 URL 제거 + 짧은 콘텐츠 필터링."""
+    # 중복 제거 + 짧은 콘텐츠 제외
     seen_urls: set[str] = set()
-    result = []
-    for item in items:
-        content = item.get("content", "").strip()
-        if len(content) < MIN_CONTENT_LEN:
-            continue
+    unique = []
+    for item in all_items:
         url = item.get("url", "")
         base_url = url.split("?")[0] if url else ""
+        content = item.get("content", "").strip()
+        if len(content) < 50:
+            continue
         if base_url and base_url in seen_urls:
             continue
         if base_url:
             seen_urls.add(base_url)
-        result.append(item)
-    return result
+        unique.append(item)
+
+    return unique
 
 
-def prepare_records(items: list[dict]) -> tuple[list[str], list[str], list[dict]]:
-    """문서를 청킹하고 업로드용 (ids, texts, metadata) 튜플을 준비한다."""
-    ids = []
-    texts = []
-    metadata_list = []
+async def build_graph(documents: list[dict]):
+    """엔티티/관계를 추출하고 지식그래프를 구축한다."""
+    print(f"\n[2/3] 엔티티/관계 추출 중... ({len(documents)}개 문서)")
+    extractions = []
+    all_entities = []
 
-    for item in items:
-        title = item.get("title", "")
-        content = item.get("content", "")
-        url = item.get("url", "")
-        source = item.get("source", "")
+    for i, doc in enumerate(documents):
+        title = doc.get("title", "")
+        content = doc.get("content", "")
+        try:
+            extraction = await extract_entities_from_doc(title, content)
+            extractions.append(extraction)
+            all_entities.extend([e.model_dump() for e in extraction.entities])
+            if (i + 1) % 50 == 0 or i == len(documents) - 1:
+                print(f"  ... {i + 1}/{len(documents)} 완료")
+        except Exception as e:
+            print(f"  [error] 문서 {i} ({title[:30]}): {e}")
+            from graph.graph_builder import DocumentGraphExtraction
+            extractions.append(DocumentGraphExtraction(entities=[], relationships=[]))
 
-        # 제목 + 본문을 합쳐서 청킹
-        full_text = f"{title}\n{content}" if title else content
-        chunks = chunk_text(full_text, max_chars=1000, overlap=200)
+    print(f"  추출된 엔티티: {len(all_entities)}개")
 
-        for chunk_idx, chunk in enumerate(chunks):
-            doc_id = make_doc_id(url or title, chunk_idx)
-            ids.append(doc_id)
-            texts.append(chunk)
-            metadata_list.append({
-                "title": title[:200],
-                "url": url,
-                "source": source,
-                "content_preview": chunk[:500],
-                "chunk_index": chunk_idx,
-                "total_chunks": len(chunks),
-            })
+    # 엔티티 중복 해결
+    print("\n  엔티티 중복 해결 중...")
+    canonical_map = resolve_duplicate_entities(all_entities)
+    unique_entities = len(set(canonical_map.values()))
+    print(f"  병합 후 고유 엔티티: {unique_entities}개")
 
-    return ids, texts, metadata_list
+    # 그래프 구축
+    G = build_networkx_graph(documents, extractions, canonical_map)
+    entity_nodes = sum(1 for _, d in G.nodes(data=True) if d.get("node_type") == "ENTITY")
+    doc_nodes = sum(1 for _, d in G.nodes(data=True) if d.get("node_type") == "DOCUMENT")
+    print(f"  그래프: {entity_nodes} 엔티티, {doc_nodes} 문서, {G.number_of_edges()} 엣지")
+
+    return G
 
 
-def build_pinecone(items: list[dict], embed_model):
-    """Pinecone 벡터 인덱스를 빌드한다."""
-    api_key = os.getenv("PINECONE_API_KEY")
-    if not api_key:
-        print("PINECONE_API_KEY 환경변수를 설정해주세요.")
-        sys.exit(1)
-
-    # 청킹 & 레코드 준비
-    print("\n[Pinecone] 문서 청킹...")
-    ids, texts, metadata_list = prepare_records(items)
-    print(f"  총 {len(texts)}개 청크 생성")
-
-    # 임베딩 생성
-    print("\n[Pinecone] 임베딩 생성...")
-    vectors = embed_documents(embed_model, texts)
-    print(f"  {len(vectors)}개 벡터 생성 완료 (차원: {len(vectors[0])})")
+def build_embeddings(documents: list[dict]):
+    """임베딩을 생성하고 Pinecone에 업로드한다."""
+    print(f"\n[1/3] 임베딩 생성 중... ({len(documents)}개 문서)")
+    model = get_embed_model()
+    texts = [f"{doc.get('title', '')} {doc.get('content', '')}" for doc in documents]
+    vectors = embed_documents(model, texts)
+    print(f"  임베딩 완료: {len(vectors)}개 벡터 (차원: {len(vectors[0])})")
 
     # Pinecone 업로드
-    print("\n[Pinecone] 업로드...")
-    pc = init_pinecone(api_key)
-    index = get_or_create_index(pc)
-    count = upsert_vectors(index, ids, vectors, metadata_list)
-    print(f"  {count}개 벡터 업로드 완료")
+    print("\n  Pinecone 인덱스 초기화 중...")
+    index = init_pinecone()
 
-    stats = index.describe_index_stats()
-    print(f"  Pinecone 총 벡터 수: {stats.total_vector_count}")
+    ids = [f"doc_{i}" for i in range(len(documents))]
+    metadata_list = [
+        {
+            "title": doc.get("title", "")[:200],
+            "url": doc.get("url", ""),
+            "source": doc.get("source", "faq"),
+            "content_preview": doc.get("content", "")[:500],
+        }
+        for doc in documents
+    ]
+
+    print(f"  Pinecone에 {len(ids)}개 벡터 업로드 중...")
+    upsert_vectors(index, ids, vectors, metadata_list)
+    print("  업로드 완료!")
 
 
-def build_graph(items: list[dict], embed_model):
-    """지식그래프를 빌드한다."""
-    from graph.graph_builder import build_knowledge_graph
+async def main():
+    print("=" * 60)
+    print("Hybrid RAG 인덱스 빌드 시작")
+    print("=" * 60)
 
-    asyncio.run(build_knowledge_graph(items, embed_model))
+    documents = load_documents()
+    print(f"\n로드된 문서: {len(documents)}개")
+    for source in ("faq", "board", "eluocnc"):
+        count = sum(1 for d in documents if d.get("source") == source)
+        print(f"  - {source}: {count}건")
 
+    # 1. 임베딩 + Pinecone
+    build_embeddings(documents)
 
-def main():
-    args = set(sys.argv[1:])
-    do_pinecone = "--pinecone" in args or not args
-    do_graph = "--graph" in args or not args
+    # 2. 엔티티/관계 추출 + 지식그래프
+    G = await build_graph(documents)
 
-    print("=" * 50)
-    print("Hybrid RAG 인덱스 빌드")
-    if do_pinecone:
-        print("  - Pinecone 벡터 인덱스")
-    if do_graph:
-        print("  - 지식그래프 (NetworkX)")
-    print("=" * 50)
+    # 3. 그래프 저장
+    print(f"\n[3/3] 지식그래프 저장: {GRAPH_PATH}")
+    save_graph(G, GRAPH_PATH)
 
-    # 데이터 로드
-    print("\n[데이터] 로드...")
-    items = load_json_data()
-    items = deduplicate(items)
-    print(f"  총 {len(items)}건 (중복/빈 항목 제거 후)")
-
-    # 임베딩 모델 로드 (공유)
-    print("\n[모델] 임베딩 모델 로드...")
-    embed_model = get_embed_model()
-
-    if do_pinecone:
-        build_pinecone(items, embed_model)
-
-    if do_graph:
-        build_graph(items, embed_model)
-
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 60)
     print("빌드 완료!")
-    print("=" * 50)
+    print("=" * 60)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -7,7 +7,7 @@
 하나의 저장소에 두 개의 프로젝트가 있습니다:
 
 1. **PydanticAI 튜토리얼** (`src/introduction.py`) — 구조화된 응답, 의존성 주입, 도구 통합, 메시지 히스토리 등 PydanticAI 에이전트 패턴을 순차적으로 보여주는 예제 모음. 대부분의 예제는 주석 처리되어 있으며, 주석을 해제하면 실행 가능. Dave Ebbelaar (Datalumina) 작성.
-2. **엘루오 LINE WORKS FAQ 챗봇** — LINE WORKS 도움말 페이지를 크롤링하고, TF-IDF로 인덱싱한 뒤, PydanticAI + Gemini 에이전트가 질문에 답변하며, Streamlit 채팅 UI로 제공.
+2. **엘루오 LINE WORKS FAQ 챗봇** — LINE WORKS 도움말 페이지를 크롤링하고, Hybrid RAG (VectorRAG + GraphRAG)로 검색한 뒤, PydanticAI + Claude 에이전트가 질문에 답변하며, Streamlit 채팅 UI로 제공.
 3. **LINE WORKS 게시판 크롤러** — `board.worksmobile.com` 사내 게시판을 Playwright 브라우저 자동화로 크롤링. 게시글 본문 + 첨부파일(PDF/DOCX/XLSX/HWP) 텍스트 추출. FAQ와 통합하여 챗봇에서 사내 규정/업무가이드 질문에도 답변 가능.
 4. **엘루오씨앤씨 웹사이트 크롤러** — `eluocnc.com` 공식 웹사이트의 sitemap + AJAX 엔드포인트에서 URL 수집, 정적 페이지/프로젝트/블로그/PDF 콘텐츠 추출. FAQ 챗봇 파이프라인에 통합.
 
@@ -35,6 +35,9 @@ python src/scraper/board_scraper.py --from-local data/board_raw/
 # 엘루오씨앤씨 웹사이트 크롤링 (data/eluocnc.json에 저장)
 python src/scraper/eluocnc_scraper.py
 
+# Hybrid RAG 인덱스 빌드 (최초 1회, 데이터 변경 시 재실행)
+python src/graph/build_index.py
+
 # 챗봇 UI 실행 (FAQ + 게시판 + 홈페이지 데이터 통합)
 streamlit run src/app.py
 
@@ -44,7 +47,7 @@ python -c "import sys; sys.path.insert(0,'src'); from agent.faq_agent import ask
 
 ## 환경 설정
 
-`.env.example`을 `.env`로 복사. `.env.example`에는 `OPENAI_API_KEY`가 있지만, 실제 코드는 `GoogleModel("gemini-2.5-flash")`를 사용하므로 `GEMINI_API_KEY`(또는 google-genai SDK가 요구하는 환경 변수)를 설정해야 합니다. 게시판 크롤러를 사용하려면 `LINEWORKS_ID`, `LINEWORKS_PW`도 설정해야 합니다.
+`.env.example`을 `.env`로 복사하고, `ANTHROPIC_API_KEY`와 `PINECONE_API_KEY`를 설정해야 합니다. 게시판 크롤러를 사용하려면 `LINEWORKS_ID`, `LINEWORKS_PW`도 설정해야 합니다.
 
 ## 아키텍처
 
@@ -65,10 +68,14 @@ python -c "import sys; sys.path.insert(0,'src'); from agent.faq_agent import ask
 - **게시판 크롤러** (`src/scraper/board_scraper.py`): Playwright로 `board.worksmobile.com` 로그인 → 게시글 목록/상세 수집 → 첨부파일 다운로드 & 텍스트 추출 → `data/board_lineworks.json` 저장. `--from-local` 플래그로 수동 다운로드 폴백 가능.
 - **첨부파일 추출기** (`src/scraper/file_extractor.py`): PDF(`pdfplumber`), DOCX(`python-docx`), XLSX(`openpyxl`), HWP(`python-hwp`/`olefile` 폴백)에서 텍스트 추출.
 - **엘루오씨앤씨 크롤러** (`src/scraper/eluocnc_scraper.py`): `sitemap.xml`에서 `/ko/` URL 수집 + AJAX 엔드포인트(`ajax.works_list.asp`, `ajax.idea_list.asp`)로 프로젝트/블로그 URL 추가 수집 → 페이지 스크래핑 + PDF 텍스트 추출 → `data/eluocnc.json` 저장.
-- **에이전트** (`src/agent/faq_agent.py`): `FAQDatabase` dataclass가 FAQ + 게시판 + 홈페이지 데이터를 병합하여 TF-IDF 인덱스(scikit-learn) 구축. `search_faq` 도구가 cosine similarity로 상위 3개 결과를 출처(FAQ/게시판/회사 홈페이지)와 함께 반환. `GoogleModel("gemini-2.5-flash")`와 한국어 시스템 프롬프트 사용.
-- **UI** (`src/app.py`): Streamlit 채팅 인터페이스. 사이드바에 FAQ/게시판 데이터소스 현황 표시. `st.cache_resource`로 FAQDatabase 캐시. BadRequestError 발생 시 히스토리 없이 재시도하는 폴백 처리 포함.
+- **임베딩 모듈** (`src/graph/embedding_index.py`): `sentence-transformers`(`paraphrase-multilingual-MiniLM-L12-v2`)로 384차원 임베딩 생성. Pinecone 벡터 DB에 저장/검색.
+- **그래프 빌더** (`src/graph/graph_builder.py`): Claude API로 문서에서 엔티티/관계 추출. Pydantic `DocumentGraphExtraction` 스키마로 구조화. 임베딩 유사도 기반 엔티티 중복 해결. NetworkX 그래프 구축.
+- **빌드 스크립트** (`src/graph/build_index.py`): JSON 데이터 → 임베딩 + Pinecone 업로드 + 엔티티/관계 추출 + 지식그래프 구축. 최초 1회 실행.
+- **GraphRAG 데이터베이스** (`src/agent/graph_database.py`): `GraphRAGDatabase` dataclass. Hybrid 검색 = 벡터 검색(Pinecone) + 그래프 검색(NetworkX 1-2홉 탐색). Reciprocal Rank Fusion으로 결과 합산.
+- **에이전트** (`src/agent/faq_agent.py`): `GraphRAGDatabase`를 deps로 사용. `search_faq`(하이브리드 검색), `explore_topic`(그래프 탐색), `list_titles`, `get_item_detail`, `get_data_stats` 도구 제공. `AnthropicModel("claude-sonnet-4-20250514")`와 한국어 시스템 프롬프트 사용.
+- **UI** (`src/app.py`): Streamlit 채팅 인터페이스. 데이터 상태 배너에 Knowledge Graph 엔티티/관계 수 표시. `st.cache_resource`로 GraphRAGDatabase 캐시. 참고자료 카드에 "관련 개념" 섹션 추가. BadRequestError 발생 시 히스토리 없이 재시도하는 폴백 처리 포함.
 
-데이터 흐름: (sitemap XML → FAQ 크롤러 → `faq_lineworks.json`) + (게시판 → Playwright 크롤러 → `board_lineworks.json`) + (eluocnc.com → 웹사이트 크롤러 → `eluocnc.json`) → `FAQDatabase.load()` → TF-IDF 인덱스 → 에이전트 도구 → LLM 응답.
+데이터 흐름: (sitemap XML → FAQ 크롤러 → `faq_lineworks.json`) + (게시판 → Playwright 크롤러 → `board_lineworks.json`) + (eluocnc.com → 웹사이트 크롤러 → `eluocnc.json`) → `build_index.py` → (Pinecone 벡터 인덱스 + `knowledge_graph.json`) → `GraphRAGDatabase.load()` → Hybrid 검색 → Claude 답변 생성.
 
 ## 알려진 이슈
 
@@ -78,3 +85,7 @@ python -c "import sys; sys.path.insert(0,'src'); from agent.faq_agent import ask
 - 게시판 크롤러의 CSS 셀렉터는 LINE WORKS UI 업데이트 시 깨질 수 있으며, 최초 실행 시 조정 필요
 - LINE WORKS 2FA/OTP 설정 시 최초 로그인에 수동 개입 필요 → `storage_state`로 이후 자동화
 - `python-hwp`가 모든 HWP 버전을 지원하지 않을 수 있음 → 실패 시 `olefile` 폴백 또는 파일명만 기록
+- Claude API 비용: 엔티티 추출 시 문서당 1회 API 호출. 800개 문서 기준 최초 빌드 시 약 $1-2 예상
+- sentence-transformers 모델이 ~140MB RAM 차지. 서버에서 상시 로드 필요
+- Pinecone 무료 티어: Starter 플랜에서 1개 인덱스, 100K 벡터까지 무료
+- Pinecone 검색은 인터넷 연결 필요. 연결 실패 시 벡터 검색 비활성화 (그래프 검색만 동작)

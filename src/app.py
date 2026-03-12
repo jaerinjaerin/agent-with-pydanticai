@@ -1,59 +1,334 @@
 """
-Ask Eluo — Streamlit 채팅 UI.
+LINE WORKS FAQ 챗봇 Streamlit UI.
 
-PydanticAI 에이전트 기반 사내 지식 검색 챗봇.
+PydanticAI 에이전트를 활용한 대화형 FAQ 챗봇 인터페이스.
+노션 스타일 도식화 적용.
 """
 
+import asyncio
 import sys
+import threading
 from pathlib import Path
 
-# sniffio 패치 + 백그라운드 루프 — 반드시 첫 번째 import
-from ui.async_runtime import run_async  # noqa: E402
+# ── sniffio 패치 (모든 import보다 먼저 실행) ──
+# Streamlit Cloud(uvloop)에서 sniffio가 비동기 백엔드를 감지하지 못하는 문제를 해결.
+# 이 패치는 어떤 라이브러리가 import되기 전에 적용되어야 한다.
+import sniffio
+_sniffio_original = sniffio.current_async_library
+def _patched_sniffio():
+    try:
+        return _sniffio_original()
+    except sniffio.AsyncLibraryNotFoundError:
+        return "asyncio"
+sniffio.current_async_library = _patched_sniffio
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+
+# 표준 asyncio 루프를 백그라운드 스레드에서 운영한다.
+# uvloop(Streamlit Cloud)과 완전히 분리된 별도 루프이므로 nest_asyncio 불필요.
+_bg_loop = asyncio.DefaultEventLoopPolicy().new_event_loop()
+
+
+def _run_loop():
+    asyncio.set_event_loop(_bg_loop)
+    _bg_loop.run_forever()
+
+
+_bg_thread = threading.Thread(target=_run_loop, daemon=True)
+_bg_thread.start()
+
+
+def run_async(coro):
+    """백그라운드 표준 asyncio 루프에서 코루틴을 실행한다."""
+    ctx = get_script_run_ctx()
+
+    async def _with_ctx():
+        # 백그라운드 스레드에 Streamlit ScriptRunContext를 전파하여
+        # 'missing ScriptRunContext' 경고를 방지한다.
+        add_script_run_ctx(threading.current_thread(), ctx)
+        return await coro
+
+    future = asyncio.run_coroutine_threadsafe(_with_ctx(), _bg_loop)
+    return future.result()
 
 # src 디렉토리를 path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from agent.faq_agent import GraphRAGDatabase, faq_agent, get_graph_db
-from ui.og_cards import render_og_cards
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_STATIC = Path(__file__).resolve().parent / "ui" / "static"
-_AVATAR_BOT = str(_STATIC / "avatar_bot.svg")
-_AVATAR_USER = str(_STATIC / "avatar_user.svg")
 
-st.set_page_config(page_title="Ask Eluo", page_icon="💬", layout="wide")
+st.set_page_config(page_title="엘루오 도우미", page_icon="💬", layout="wide")
 
-# ── CSS / JS 로드 ──
-st.markdown(f"<style>\n{_STATIC.joinpath('style.css').read_text()}\n</style>", unsafe_allow_html=True)
+# ── 노션 스타일 CSS ──
+st.markdown("""
+<style>
+/* 전역 폰트 */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap');
+html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
 
-st.markdown(f"<script>\n{_STATIC.joinpath('scroll_lock.js').read_text()}\n</script>", unsafe_allow_html=True)
+/* 사이드바 숨김 */
+section[data-testid="stSidebar"] { display: none; }
+[data-testid="collapsedControl"] { display: none; }
+
+/* 데이터 로드 상태 배너 */
+.data-status {
+    background: #f7f6f3;
+    border: 1px solid #e9e9e7;
+    border-radius: 8px;
+    padding: 8px 16px;
+    margin-bottom: 16px;
+    font-size: 0.85rem;
+    color: #37352f;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+}
+.data-status .status-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.data-status .status-count {
+    font-weight: 600;
+}
+
+/* 채팅 메시지 */
+.stChatMessage { border-radius: 12px; }
+
+/* 참고자료 카드 */
+.ref-card {
+    background: #ffffff;
+    border: 1px solid #e9e9e7;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 10px;
+    transition: box-shadow 0.2s;
+}
+.ref-card:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+/* 출처 뱃지 */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.badge-faq {
+    background: #e8f5e9;
+    color: #2e7d32;
+}
+.badge-board {
+    background: #e3f2fd;
+    color: #1565c0;
+}
+.badge-eluocnc {
+    background: #fce4ec;
+    color: #c62828;
+}
+
+/* 유사도 바 */
+.score-bar-bg {
+    background: #f0f0ef;
+    border-radius: 4px;
+    height: 6px;
+    width: 100%;
+    margin-top: 8px;
+}
+.score-bar-fill {
+    height: 6px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #6c5ce7, #a29bfe);
+}
+
+/* 카드 제목 */
+.ref-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #37352f;
+    margin: 4px 0;
+    line-height: 1.4;
+}
+
+/* 카드 본문 미리보기 */
+.ref-content {
+    font-size: 0.85rem;
+    color: #6b6b6b;
+    margin-top: 6px;
+    line-height: 1.6;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* 카드 URL */
+.ref-url {
+    font-size: 0.75rem;
+    color: #9b9a97;
+    margin-top: 8px;
+    word-break: break-all;
+}
+.ref-url a { color: #2383e2; text-decoration: none; }
+.ref-url a:hover { text-decoration: underline; }
+
+/* callout 박스 */
+.callout {
+    background: #f7f6f3;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 10px 0;
+    border-left: 3px solid #e9e9e7;
+    font-size: 0.9rem;
+    color: #37352f;
+}
+.callout-icon {
+    margin-right: 8px;
+    font-size: 1.1rem;
+}
+
+/* 구분선 */
+.notion-divider {
+    border: none;
+    border-top: 1px solid #e9e9e7;
+    margin: 16px 0;
+}
+
+/* 섹션 헤더 */
+.section-header {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #9b9a97;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 10px;
+}
+
+/* 자동 스크롤 방지 */
+[data-testid="ScrollToBottomContainer"] { display: none !important; }
+[data-testid="stChatMessageContainer"] {
+    overflow-anchor: none !important;
+    scroll-behavior: auto !important;
+}
+.stApp, .stApp * {
+    scroll-behavior: auto !important;
+    scroll-margin: 0 !important;
+    scroll-padding: 0 !important;
+}
+/* expander 열릴 때 스크롤 이동 방지 */
+[data-testid="stExpander"],
+[data-testid="stExpander"] * {
+    scroll-margin-top: 0 !important;
+    scroll-margin-bottom: 0 !important;
+    scroll-snap-align: none !important;
+}
+[data-testid="stExpanderDetails"] {
+    overflow-anchor: none !important;
+}
+
+/* 참고자료 expander 컴팩트 스타일 */
+.ref-expander [data-testid="stExpander"] {
+    border: 1px solid #e9e9e7;
+    border-radius: 8px;
+    margin-top: 8px;
+}
+.ref-expander [data-testid="stExpanderDetails"] {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* 참고자료 카드 컴팩트 */
+.ref-card {
+    padding: 10px 14px !important;
+    margin-bottom: 6px !important;
+}
+.ref-title { font-size: 0.85rem !important; }
+.ref-content {
+    font-size: 0.8rem !important;
+    -webkit-line-clamp: 2 !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+st.title("💬 엘루오 도우미")
+st.caption("FAQ 및 사내 규정/업무가이드 관련 질문을 입력해주세요.")
+
+# 자동 스크롤 방지 JS — 프로그래밍적 스크롤을 완전 차단하고 사용자 입력만 허용
+st.markdown("""
+<script>
+(function() {
+    if (window.__scrollLockApplied) return;
+    window.__scrollLockApplied = true;
+
+    // 사용자가 직접 스크롤할 때만 허용 플래그
+    let userInitiated = false;
+    ['wheel', 'touchmove', 'touchstart', 'keydown', 'mousedown'].forEach(evt => {
+        window.addEventListener(evt, () => {
+            userInitiated = true;
+            setTimeout(() => { userInitiated = false; }, 300);
+        }, { capture: true, passive: true });
+    });
+
+    // window.scrollTo / window.scroll 차단
+    const _scrollTo = window.scrollTo.bind(window);
+    window.scrollTo = function(...args) {
+        if (userInitiated) _scrollTo(...args);
+    };
+    window.scroll = function(...args) {
+        if (userInitiated) _scrollTo(...args);
+    };
+
+    // Element.scrollIntoView 차단
+    Element.prototype.scrollIntoView = function() {};
+
+    // ScrollToBottom 버튼 제거
+    new MutationObserver(function() {
+        document.querySelectorAll('[data-testid="ScrollToBottomContainer"]')
+            .forEach(el => el.remove());
+    }).observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+""", unsafe_allow_html=True)
 
 
 @st.cache_resource
-def load_faq_db() -> GraphRAGDatabase:
-    """FAQ 데이터베이스를 로드하고 캐시한다."""
+def load_graph_db() -> GraphRAGDatabase:
+    """GraphRAG 데이터베이스를 로드하고 캐시한다."""
     return get_graph_db()
 
 
-# DB 로드
+# GraphRAG DB 로드
 try:
-    faq_db = load_faq_db()
-    pinecone_ok = faq_db.pinecone_index is not None
-    badge_class = "connected" if pinecone_ok else "disconnected"
-    badge_text = "Pinecone" if pinecone_ok else "Pinecone 연결 안됨"
+    faq_db = load_graph_db()
+    faq_count = sum(1 for item in faq_db.items if item.get("source", "faq") == "faq")
+    board_count = sum(1 for item in faq_db.items if item.get("source") == "board")
+    eluocnc_count = sum(1 for item in faq_db.items if item.get("source") == "eluocnc")
+    entity_count = sum(
+        1 for _, d in faq_db.graph.nodes(data=True) if d.get("node_type") == "ENTITY"
+    ) if faq_db.graph.number_of_nodes() > 0 else 0
+    edge_count = faq_db.graph.number_of_edges()
     st.markdown(f"""
-    <div class="pinecone-badge {badge_class}">
-        <span class="pinecone-dot"></span>
-        {badge_text}
+    <div class="data-status">
+        <span>✅ 데이터 로드 완료</span>
+        <span class="status-item">📄 FAQ <span class="status-count">{faq_count}</span>개</span>
+        <span class="status-item">📋 게시판 <span class="status-count">{board_count}</span>개</span>
+        <span class="status-item">🏢 홈페이지 <span class="status-count">{eluocnc_count}</span>개</span>
+        <span class="status-item">🔗 Knowledge Graph <span class="status-count">{entity_count}</span> 엔티티, <span class="status-count">{edge_count}</span> 관계</span>
+        <span class="status-item">총 <span class="status-count">{len(faq_db.items)}</span>개</span>
     </div>
     """, unsafe_allow_html=True)
 except FileNotFoundError:
     st.error(
         "데이터가 없습니다. 먼저 크롤러를 실행해주세요:\n\n"
-        "`python src/scraper/board_scraper.py`\n\n"
-        "`python src/scraper/eluocnc_scraper.py`"
+        "`python src/scraper/faq_scraper.py`\n\n"
+        "`python src/scraper/board_scraper.py`"
     )
     st.stop()
 except ValueError as e:
@@ -68,67 +343,114 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "pydantic_history" not in st.session_state:
     st.session_state.pydantic_history = []
+def resolve_image_path(img_path: str) -> Path:
+    """이미지 경로를 절대 경로로 해석한다."""
+    p = Path(img_path)
+    if p.is_absolute():
+        return p
+    return PROJECT_ROOT / p
 
-# 웰컴 — 대화 시작 전에만 표시
-welcome_slot = st.empty()
-if not st.session_state.messages:
-    welcome_slot.markdown("""
-    <div class="welcome-card">
-        <div class="welcome-greeting">Ask Eluo</div>
+
+def render_ref_card(r: dict):
+    """검색 결과를 노션 스타일 카드로 렌더링한다."""
+    source = r.get("source", "faq")
+    badge_map = {
+        "faq": ("badge-faq", "FAQ"),
+        "board": ("badge-board", "게시판"),
+        "eluocnc": ("badge-eluocnc", "홈페이지"),
+    }
+    badge_class, badge_label = badge_map.get(source, ("badge-faq", source))
+    score = r.get("score", 0)
+    score_pct = min(int(score * 100), 100)
+    content_preview = r.get("content", "")[:200].replace("\n", " ")
+    url = r.get("url", "")
+    url_html = f'<a href="{url}" target="_blank">{url}</a>' if url else "—"
+
+    # 관련 개념 표시
+    concepts = r.get("related_concepts", [])
+    concepts_html = ""
+    if concepts:
+        concepts_str = ", ".join(concepts[:3])
+        concepts_html = f'<div style="font-size:0.75rem; color:#6c5ce7; margin-top:4px;">🔗 {concepts_str}</div>'
+
+    st.markdown(f"""
+    <div class="ref-card">
+        <div>
+            <span class="badge {badge_class}">{badge_label}</span>
+            <span style="font-size:0.75rem; color:#9b9a97;">유사도 {score:.0%}</span>
+        </div>
+        <div class="ref-title">{r.get('title', '')}</div>
+        <div class="ref-content">{content_preview}</div>
+        {concepts_html}
+        <div class="score-bar-bg"><div class="score-bar-fill" style="width:{score_pct}%"></div></div>
+        <div class="ref-url">{url_html}</div>
     </div>
     """, unsafe_allow_html=True)
 
+
+def render_ref_panel(search_results: list[dict]):
+    """검색 결과 패널을 접을 수 있는 expander로 렌더링한다."""
+    valid = [r for r in search_results if r.get("score", 0) > 0]
+    if not valid:
+        return
+
+    with st.expander(f"📚 참고 자료 ({len(valid)}건)", expanded=False):
+        for r in valid:
+            render_ref_card(r)
+
+            # 첨부파일 이미지
+            images = r.get("images", [])
+            existing = [p for p in images if resolve_image_path(p).exists()]
+            if existing:
+                with st.expander(f"📎 첨부파일 이미지 ({len(existing)}장)"):
+                    for img_path in existing:
+                        st.image(str(resolve_image_path(img_path)))
+
+
+def render_images_from_history(image_groups: list[dict]):
+    """히스토리에 저장된 이미지 그룹을 표시한다."""
+    if not image_groups:
+        return
+    for img_group in image_groups:
+        with st.expander(f"📎 {img_group['title']} — 첨부파일 이미지"):
+            for img_path in img_group["paths"]:
+                resolved = resolve_image_path(img_path)
+                if resolved.exists():
+                    st.image(str(resolved))
+
+
 # 대화 히스토리 표시
 for idx, msg in enumerate(st.session_state.messages):
-    avatar = _AVATAR_BOT if msg["role"] == "assistant" else _AVATAR_USER
-    with st.chat_message(msg["role"], avatar=avatar):
+    with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if msg["role"] == "assistant" and msg.get("og_cards"):
-            render_og_cards(msg["content"], og_cache=msg["og_cards"])
+        if msg["role"] == "assistant":
+            # 참고자료 패널 재표시
+            if msg.get("references"):
+                render_ref_panel(msg["references"])
+            elif msg.get("images"):
+                render_images_from_history(msg["images"])
 
 if prompt := st.chat_input("질문을 입력하세요..."):
-    welcome_slot.empty()
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar=_AVATAR_USER):
+    with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.chat_message("assistant", avatar=_AVATAR_BOT):
+    with st.chat_message("assistant"):
         placeholder = st.empty()
 
         async def _stream(user_prompt, deps, history):
-            """PydanticAI run_stream_events로 도구 호출 후에도 텍스트를 스트리밍한다."""
-            import time
-
-            from pydantic_ai import (
-                AgentRunResultEvent,
-                PartDeltaEvent,
-                TextPartDelta,
-            )
-
-            full_text = ""
-            last_render = 0.0
-            render_interval = 0.05  # 50ms 간격으로 화면 갱신
-            placeholder.markdown("검색 중... ⏳")
-            async for event in faq_agent.run_stream_events(
+            """PydanticAI 스트리밍으로 답변을 생성한다."""
+            async with faq_agent.run_stream(
                 user_prompt=user_prompt,
                 deps=deps,
                 message_history=history or None,
-            ):
-                if isinstance(event, AgentRunResultEvent):
-                    final_output = event.result.output
-                    if isinstance(final_output, str):
-                        full_text = final_output
-                    placeholder.markdown(full_text)
-                    return full_text, event.result.all_messages()
-                elif isinstance(event, PartDeltaEvent):
-                    if isinstance(event.delta, TextPartDelta):
-                        full_text += event.delta.content_delta
-                        now = time.monotonic()
-                        if now - last_render >= render_interval:
-                            placeholder.markdown(full_text + "▌")
-                            last_render = now
-            placeholder.markdown(full_text or "답변을 생성하지 못했습니다.")
-            return full_text, []
+            ) as result:
+                full_text = ""
+                async for chunk in result.stream_text(delta=True):
+                    full_text += chunk
+                    placeholder.markdown(full_text + "▌")
+                placeholder.markdown(full_text)
+                return full_text, result.all_messages()
 
         try:
             answer, all_messages = run_async(
@@ -145,11 +467,21 @@ if prompt := st.chat_input("질문을 입력하세요..."):
                 answer = f"죄송합니다. 오류가 발생했습니다: {e}"
                 placeholder.markdown(answer)
 
-        # URL이 있으면 OpenGraph 카드로 렌더링
-        og_cards = render_og_cards(answer)
+        # 참고자료 패널
+        search_results = faq_db.hybrid_search(prompt, top_k=3)
+        render_ref_panel(search_results)
+
+        # 이미지 경로 수집 (히스토리 저장용)
+        image_groups = []
+        for r in search_results:
+            images = r.get("images", [])
+            existing = [p for p in images if resolve_image_path(p).exists()]
+            if existing:
+                image_groups.append({"title": r["title"], "paths": existing})
 
     st.session_state.messages.append({
         "role": "assistant",
         "content": answer,
-        "og_cards": og_cards,
+        "references": search_results,
+        "images": image_groups,
     })
