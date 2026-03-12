@@ -66,6 +66,24 @@ class FAQDatabase:
                     item.setdefault("source", default_source)
                 self.items.extend(items)
 
+        # 중복 항목 제거 (동일 URL의 목록 페이지 등)
+        seen_urls: set[str] = set()
+        unique_items = []
+        for item in self.items:
+            url = item.get("url", "")
+            # URL 쿼리파라미터만 다른 중복 목록 페이지 제거 (base path 기준)
+            base_url = url.split("?")[0] if url else ""
+            content = item.get("content", "").strip()
+            # 내용이 너무 짧거나(50자 미만) 비어있으면 제외
+            if len(content) < 50:
+                continue
+            if base_url and base_url in seen_urls:
+                continue
+            if base_url:
+                seen_urls.add(base_url)
+            unique_items.append(item)
+        self.items = unique_items
+
         if not self.items:
             raise ValueError("데이터가 비어있습니다. FAQ 또는 게시판 데이터를 먼저 수집해주세요.")
 
@@ -76,7 +94,7 @@ class FAQDatabase:
         self.tfidf_matrix = self.vectorizer.fit_transform(documents)
         return self
 
-    def search(self, query: str, top_k: int = 3) -> list[dict]:
+    def search(self, query: str, top_k: int = 5) -> list[dict]:
         """쿼리와 가장 유사한 상위 k개 FAQ를 반환한다."""
         if self.tfidf_matrix is None:
             return []
@@ -96,7 +114,7 @@ class FAQDatabase:
                 results.append(
                     {
                         "title": item.get("title", ""),
-                        "content": item.get("content", "")[:500],
+                        "content": item.get("content", "")[:800],
                         "url": item.get("url", ""),
                         "source": item.get("source", "faq"),
                         "score": float(similarities[idx]),
@@ -125,15 +143,20 @@ def search_faq(ctx: RunContext[FAQDatabase], query: str) -> str:
     return "\n\n".join(output_parts)
 
 
-def list_titles(ctx: RunContext[FAQDatabase], source: str = "") -> str:
+def list_titles(ctx: RunContext[FAQDatabase], source: str = "", keyword: str = "") -> str:
     """등록된 항목들의 제목 목록을 반환합니다.
 
     Args:
-        source: 필터할 출처. "faq", "board", 또는 ""(전체).
+        source: 필터할 출처. "faq", "board", "eluocnc", 또는 ""(전체).
+        keyword: 제목에 포함된 키워드로 필터 (선택사항).
     """
     items = ctx.deps.items
     if source:
         items = [item for item in items if item.get("source") == source]
+    if keyword:
+        keyword_lower = keyword.lower()
+        items = [item for item in items if keyword_lower in item.get("title", "").lower()
+                 or keyword_lower in item.get("content", "")[:200].lower()]
 
     if not items:
         source_label = {"faq": "FAQ", "board": "게시판", "eluocnc": "회사 홈페이지"}.get(source, source)
@@ -143,7 +166,13 @@ def list_titles(ctx: RunContext[FAQDatabase], source: str = "") -> str:
     lines = []
     for i, item in enumerate(items, 1):
         src = source_labels.get(item.get("source", ""), "")
-        lines.append(f"{i}. [{src}] {item.get('title', '(제목 없음)')}")
+        title = item.get("title", "(제목 없음)")
+        # 내용 미리보기 (첫 80자)
+        preview = item.get("content", "")[:80].replace("\n", " ").strip()
+        line = f"{i}. [{src}] {title}"
+        if preview:
+            line += f" — {preview}..."
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -192,19 +221,31 @@ faq_agent = Agent(
     model=model,
     deps_type=FAQDatabase,
     system_prompt=(
-        "당신은 엘루오 회사의 LINE WORKS FAQ, 사내 규정/업무가이드, 회사 홈페이지 전문 도우미입니다. "
-        "사용자의 질문에 대해 적절한 도구를 사용하여 답변해주세요.\n"
-        "- 특정 주제 검색: search_faq 도구 사용\n"
-        "- 항목 목록 조회: list_titles 도구 사용 (source='board', 'faq', 'eluocnc'로 필터 가능)\n"
-        "- 특정 항목 상세 조회: get_item_detail 도구 사용\n"
-        "- 데이터 통계: get_data_stats 도구 사용\n\n"
-        "중요 규칙:\n"
-        "- 검색 결과에 제목이 유사한 항목이 2개 이상 나오면, 바로 답변하지 말고 "
-        "해당 항목들의 제목을 번호 목록으로 보여주며 어떤 항목에 대해 알고 싶은지 사용자에게 먼저 질문하세요. "
-        "사용자가 선택한 후에 get_item_detail로 해당 항목의 상세 내용을 조회하여 답변하세요.\n"
-        "- 답변 시 출처(FAQ, 게시판, 회사 홈페이지)와 관련 URL도 함께 제공해주세요.\n"
+        "당신은 엘루오씨앤씨(디지털 마케팅 에이전시)의 사내 도우미입니다.\n"
+        "LINE WORKS FAQ, 사내 규정/업무가이드(게시판), 회사 홈페이지 데이터를 기반으로 답변합니다.\n\n"
+        "## 질문 의도 파악 및 도구 사용 전략\n"
+        "사용자의 질문 의도를 먼저 파악한 후, 적합한 도구를 선택하세요:\n\n"
+        "1. **넓은 탐색 질문** (예: '프로젝트 알려줘', '회사 소개해줘', '어떤 일을 하는 회사야?')\n"
+        "   → list_titles(source='eluocnc')로 관련 항목 목록 조회\n"
+        "   → 그중 대표적인 항목 몇 개를 get_item_detail로 상세 조회\n"
+        "   → 조회 결과를 종합하여 자연스럽게 요약 답변\n\n"
+        "2. **특정 주제 질문** (예: '비밀번호 변경 방법', '연차 신청은?')\n"
+        "   → search_faq로 키워드 검색\n"
+        "   → 결과가 명확하면 바로 답변, 유사 항목이 여러 개면 목록 제시 후 선택 요청\n\n"
+        "3. **목록/통계 질문** (예: '게시판 글 목록', '데이터 몇 건이야?')\n"
+        "   → list_titles 또는 get_data_stats 사용\n\n"
+        "4. **특정 항목 상세 질문** (예: '이마트 프로젝트 자세히', '경동나비엔 프로젝트 알려줘')\n"
+        "   → get_item_detail로 바로 상세 조회\n\n"
+        "## 데이터 출처 구분\n"
+        "- source='faq': LINE WORKS 도움말 FAQ\n"
+        "- source='board': 사내 게시판 (규정, 업무가이드)\n"
+        "- source='eluocnc': 회사 홈페이지 (회사 소개, 프로젝트, 블로그)\n\n"
+        "## 답변 규칙\n"
+        "- 답변은 항상 한국어로, 자연스럽고 친절한 톤으로 작성하세요.\n"
+        "- 검색 결과를 그대로 나열하지 말고, 사용자의 질문 의도에 맞게 정리하여 답변하세요.\n"
+        "- 답변 끝에 출처(FAQ/게시판/회사 홈페이지)와 관련 URL을 함께 제공하세요.\n"
         "- 검색 결과가 없거나 관련이 없는 경우, 솔직하게 모른다고 답변하세요.\n"
-        "- 항상 한국어로 답변하세요."
+        "- 도구를 한 번만 호출해서 부족하면, 추가 도구를 호출하여 충분한 정보를 확보한 뒤 답변하세요."
     ),
     tools=[
         Tool(search_faq, takes_ctx=True),

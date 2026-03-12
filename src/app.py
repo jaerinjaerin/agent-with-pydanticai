@@ -495,6 +495,9 @@ for idx, msg in enumerate(st.session_state.messages):
                     st.session_state.pending_selection = selected
                     st.rerun()
 
+# chat_input은 항상 호출하여 입력창이 사라지지 않도록 한다
+chat_input_text = st.chat_input("질문을 입력하세요...")
+
 # 셀렉트박스 선택 처리
 if st.session_state.pending_selection:
     prompt = f"{st.session_state.pending_selection}에 대해 자세히 알려줘"
@@ -504,7 +507,8 @@ if st.session_state.pending_selection:
         st.session_state.messages[-1]["choices"] = None
     st.session_state.messages.append({"role": "user", "content": prompt})
     _has_input = True
-elif prompt := st.chat_input("질문을 입력하세요..."):
+elif chat_input_text:
+    prompt = chat_input_text
     _has_input = True
 else:
     _has_input = False
