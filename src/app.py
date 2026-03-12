@@ -55,7 +55,7 @@ def run_async(coro):
 # src 디렉토리를 path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from agent.faq_agent import FAQDatabase, faq_agent, get_faq_db
+from agent.faq_agent import GraphRAGDatabase, faq_agent, get_graph_db
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -299,23 +299,28 @@ st.markdown("""
 
 
 @st.cache_resource
-def load_faq_db() -> FAQDatabase:
-    """FAQ 데이터베이스를 로드하고 캐시한다."""
-    return get_faq_db()
+def load_graph_db() -> GraphRAGDatabase:
+    """GraphRAG 데이터베이스를 로드하고 캐시한다."""
+    return get_graph_db()
 
 
-# FAQ DB 로드
+# GraphRAG DB 로드
 try:
-    faq_db = load_faq_db()
+    faq_db = load_graph_db()
     faq_count = sum(1 for item in faq_db.items if item.get("source", "faq") == "faq")
     board_count = sum(1 for item in faq_db.items if item.get("source") == "board")
     eluocnc_count = sum(1 for item in faq_db.items if item.get("source") == "eluocnc")
+    entity_count = sum(
+        1 for _, d in faq_db.graph.nodes(data=True) if d.get("node_type") == "ENTITY"
+    ) if faq_db.graph.number_of_nodes() > 0 else 0
+    edge_count = faq_db.graph.number_of_edges()
     st.markdown(f"""
     <div class="data-status">
         <span>✅ 데이터 로드 완료</span>
         <span class="status-item">📄 FAQ <span class="status-count">{faq_count}</span>개</span>
         <span class="status-item">📋 게시판 <span class="status-count">{board_count}</span>개</span>
         <span class="status-item">🏢 홈페이지 <span class="status-count">{eluocnc_count}</span>개</span>
+        <span class="status-item">🔗 Knowledge Graph <span class="status-count">{entity_count}</span> 엔티티, <span class="status-count">{edge_count}</span> 관계</span>
         <span class="status-item">총 <span class="status-count">{len(faq_db.items)}</span>개</span>
     </div>
     """, unsafe_allow_html=True)
@@ -361,6 +366,13 @@ def render_ref_card(r: dict):
     url = r.get("url", "")
     url_html = f'<a href="{url}" target="_blank">{url}</a>' if url else "—"
 
+    # 관련 개념 표시
+    concepts = r.get("related_concepts", [])
+    concepts_html = ""
+    if concepts:
+        concepts_str = ", ".join(concepts[:3])
+        concepts_html = f'<div style="font-size:0.75rem; color:#6c5ce7; margin-top:4px;">🔗 {concepts_str}</div>'
+
     st.markdown(f"""
     <div class="ref-card">
         <div>
@@ -369,6 +381,7 @@ def render_ref_card(r: dict):
         </div>
         <div class="ref-title">{r.get('title', '')}</div>
         <div class="ref-content">{content_preview}</div>
+        {concepts_html}
         <div class="score-bar-bg"><div class="score-bar-fill" style="width:{score_pct}%"></div></div>
         <div class="ref-url">{url_html}</div>
     </div>
@@ -455,7 +468,7 @@ if prompt := st.chat_input("질문을 입력하세요..."):
                 placeholder.markdown(answer)
 
         # 참고자료 패널
-        search_results = faq_db.search(prompt, top_k=3)
+        search_results = faq_db.hybrid_search(prompt, top_k=3)
         render_ref_panel(search_results)
 
         # 이미지 경로 수집 (히스토리 저장용)

@@ -1,132 +1,33 @@
 """
 LINE WORKS FAQ 에이전트.
 
-TF-IDF 기반 검색 툴을 갖춘 PydanticAI 에이전트로,
+Hybrid RAG (VectorRAG + GraphRAG) 검색 툴을 갖춘 PydanticAI 에이전트로,
 크롤링된 FAQ 데이터를 기반으로 사용자 질문에 답변한다.
 """
 
-import json
 import os
-from dataclasses import dataclass, field
-from pathlib import Path
 
-import asyncio
 from dotenv import load_dotenv
 from pydantic_ai import Agent, RunContext, Tool
-from pydantic_ai.models.google import GoogleModel
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from pydantic_ai.models.anthropic import AnthropicModel
 
 load_dotenv()
 
 # Streamlit Cloud secrets → 환경변수 주입
 try:
     import streamlit as st
-    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+    for key in ("ANTHROPIC_API_KEY", "PINECONE_API_KEY"):
         if key in st.secrets and key not in os.environ:
             os.environ[key] = st.secrets[key]
 except Exception:
     pass
 
-
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-FAQ_DATA_PATH = DATA_DIR / "faq_lineworks.json"
-BOARD_DATA_PATH = DATA_DIR / "board_lineworks.json"
-ELUOCNC_DATA_PATH = DATA_DIR / "eluocnc.json"
+from agent.graph_database import GraphRAGDatabase
 
 
-@dataclass
-class FAQDatabase:
-    """TF-IDF 인덱스를 포함한 FAQ 데이터베이스."""
-
-    items: list[dict] = field(default_factory=list)
-    vectorizer: TfidfVectorizer = field(default_factory=TfidfVectorizer)
-    tfidf_matrix: object = None  # sparse matrix
-
-    def load(self, paths: list[Path] | None = None) -> "FAQDatabase":
-        """하나 이상의 JSON 파일을 로드하고 TF-IDF 인덱스를 구축한다."""
-        if paths is None:
-            paths = [FAQ_DATA_PATH, BOARD_DATA_PATH, ELUOCNC_DATA_PATH]
-
-        self.items = []
-        for path in paths:
-            if not path.exists():
-                print(f"[warn] 데이터 파일 없음 (건너뜀): {path}")
-                continue
-            with open(path, encoding="utf-8") as f:
-                items = json.load(f)
-                # source 필드가 없으면 파일명 기반으로 추가
-                if "eluocnc" in path.name:
-                    default_source = "eluocnc"
-                elif "board" in path.name:
-                    default_source = "board"
-                else:
-                    default_source = "faq"
-                for item in items:
-                    item.setdefault("source", default_source)
-                self.items.extend(items)
-
-        # 중복 항목 제거 (동일 URL의 목록 페이지 등)
-        seen_urls: set[str] = set()
-        unique_items = []
-        for item in self.items:
-            url = item.get("url", "")
-            # URL 쿼리파라미터만 다른 중복 목록 페이지 제거 (base path 기준)
-            base_url = url.split("?")[0] if url else ""
-            content = item.get("content", "").strip()
-            # 내용이 너무 짧거나(50자 미만) 비어있으면 제외
-            if len(content) < 50:
-                continue
-            if base_url and base_url in seen_urls:
-                continue
-            if base_url:
-                seen_urls.add(base_url)
-            unique_items.append(item)
-        self.items = unique_items
-
-        if not self.items:
-            raise ValueError("데이터가 비어있습니다. FAQ 또는 게시판 데이터를 먼저 수집해주세요.")
-
-        # 제목 + 본문을 합쳐서 TF-IDF 벡터화
-        documents = [
-            f"{item.get('title', '')} {item.get('content', '')}" for item in self.items
-        ]
-        self.tfidf_matrix = self.vectorizer.fit_transform(documents)
-        return self
-
-    def search(self, query: str, top_k: int = 5) -> list[dict]:
-        """쿼리와 가장 유사한 상위 k개 FAQ를 반환한다."""
-        if self.tfidf_matrix is None:
-            return []
-
-        query_vec = self.vectorizer.transform([query])
-        similarities = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
-
-        top_indices = similarities.argsort()[::-1][:top_k]
-        results = []
-        for idx in top_indices:
-            if similarities[idx] > 0:
-                item = self.items[idx]
-                # 첨부파일에서 이미지 경로 수집
-                images = []
-                for att in item.get("attachments", []):
-                    images.extend(att.get("images", []))
-                results.append(
-                    {
-                        "title": item.get("title", ""),
-                        "content": item.get("content", "")[:800],
-                        "url": item.get("url", ""),
-                        "source": item.get("source", "faq"),
-                        "score": float(similarities[idx]),
-                        "images": images,
-                    }
-                )
-        return results
-
-
-def search_faq(ctx: RunContext[FAQDatabase], query: str) -> str:
-    """사용자 질문을 기반으로 FAQ 데이터베이스를 검색합니다."""
-    results = ctx.deps.search(query)
+def search_faq(ctx: RunContext[GraphRAGDatabase], query: str) -> str:
+    """사용자 질문을 기반으로 하이브리드 검색(벡터 + 그래프)을 수행합니다."""
+    results = ctx.deps.hybrid_search(query)
     if not results:
         return "관련 FAQ를 찾을 수 없습니다."
 
@@ -134,16 +35,51 @@ def search_faq(ctx: RunContext[FAQDatabase], query: str) -> str:
     output_parts = []
     for i, r in enumerate(results, 1):
         source = source_labels.get(r.get("source", "faq"), r.get("source", ""))
-        output_parts.append(
+        part = (
             f"[{i}] [{source}] {r['title']}\n"
             f"내용: {r['content']}\n"
             f"URL: {r['url']}\n"
             f"유사도: {r['score']:.3f}"
         )
+        concepts = r.get("related_concepts", [])
+        if concepts:
+            part += f"\n관련 개념: {', '.join(concepts[:3])}"
+        output_parts.append(part)
     return "\n\n".join(output_parts)
 
 
-def list_titles(ctx: RunContext[FAQDatabase], source: str = "", keyword: str = "") -> str:
+def explore_topic(ctx: RunContext[GraphRAGDatabase], topic: str) -> str:
+    """그래프에서 특정 토픽의 연결된 엔티티와 문서를 탐색합니다.
+
+    Args:
+        topic: 탐색할 토픽/주제 (예: "메일", "드라이브", "경조금").
+    """
+    results = ctx.deps.explore_topic(topic)
+    if not results:
+        return f"'{topic}' 관련 엔티티를 찾을 수 없습니다."
+
+    output_parts = []
+    for r in results:
+        neighbors_str = ""
+        entity_neighbors = [n for n in r["neighbors"] if n["type"] == "ENTITY"]
+        doc_neighbors = [n for n in r["neighbors"] if n["type"] == "DOCUMENT"]
+
+        if entity_neighbors:
+            related = [f"  - {n['name']} ({n['relation']})" for n in entity_neighbors[:5]]
+            neighbors_str += "\n관련 개념:\n" + "\n".join(related)
+        if doc_neighbors:
+            neighbors_str += f"\n관련 문서: {len(doc_neighbors)}건"
+
+        output_parts.append(
+            f"[{r['type']}] {r['entity']}\n"
+            f"설명: {r['description']}\n"
+            f"유사도: {r['similarity']:.3f}"
+            f"{neighbors_str}"
+        )
+    return "\n\n".join(output_parts)
+
+
+def list_titles(ctx: RunContext[GraphRAGDatabase], source: str = "", keyword: str = "") -> str:
     """등록된 항목들의 제목 목록을 반환합니다.
 
     Args:
@@ -167,7 +103,6 @@ def list_titles(ctx: RunContext[FAQDatabase], source: str = "", keyword: str = "
     for i, item in enumerate(items, 1):
         src = source_labels.get(item.get("source", ""), "")
         title = item.get("title", "(제목 없음)")
-        # 내용 미리보기 (첫 80자)
         preview = item.get("content", "")[:80].replace("\n", " ").strip()
         line = f"{i}. [{src}] {title}"
         if preview:
@@ -176,7 +111,7 @@ def list_titles(ctx: RunContext[FAQDatabase], source: str = "", keyword: str = "
     return "\n".join(lines)
 
 
-def get_item_detail(ctx: RunContext[FAQDatabase], title: str) -> str:
+def get_item_detail(ctx: RunContext[GraphRAGDatabase], title: str) -> str:
     """제목으로 특정 항목의 전체 내용을 반환합니다.
 
     Args:
@@ -200,41 +135,52 @@ def get_item_detail(ctx: RunContext[FAQDatabase], title: str) -> str:
     return f"'{title}'과(와) 일치하는 항목을 찾을 수 없습니다."
 
 
-def get_data_stats(ctx: RunContext[FAQDatabase]) -> str:
+def get_data_stats(ctx: RunContext[GraphRAGDatabase]) -> str:
     """데이터 소스별 항목 수 등 통계 정보를 반환합니다."""
     items = ctx.deps.items
     total = len(items)
     faq_count = sum(1 for item in items if item.get("source") == "faq")
     board_count = sum(1 for item in items if item.get("source") == "board")
     eluocnc_count = sum(1 for item in items if item.get("source") == "eluocnc")
+
+    graph = ctx.deps.graph
+    entity_count = sum(1 for _, d in graph.nodes(data=True) if d.get("node_type") == "ENTITY")
+    edge_count = graph.number_of_edges()
+
     return (
         f"전체 항목 수: {total}\n"
         f"- FAQ: {faq_count}건\n"
         f"- 게시판: {board_count}건\n"
-        f"- 회사 홈페이지: {eluocnc_count}건"
+        f"- 회사 홈페이지: {eluocnc_count}건\n"
+        f"\nKnowledge Graph:\n"
+        f"- 엔티티: {entity_count}개\n"
+        f"- 관계: {edge_count}개"
     )
 
 
-model = GoogleModel("gemini-2.5-flash")
+model = AnthropicModel("claude-sonnet-4-20250514")
 
 faq_agent = Agent(
     model=model,
-    deps_type=FAQDatabase,
+    deps_type=GraphRAGDatabase,
     system_prompt=(
         "당신은 엘루오씨앤씨(디지털 마케팅 에이전시)의 사내 도우미입니다.\n"
         "LINE WORKS FAQ, 사내 규정/업무가이드(게시판), 회사 홈페이지 데이터를 기반으로 답변합니다.\n\n"
         "## 질문 의도 파악 및 도구 사용 전략\n"
         "사용자의 질문 의도를 먼저 파악한 후, 적합한 도구를 선택하세요:\n\n"
-        "1. **넓은 탐색 질문** (예: '프로젝트 알려줘', '회사 소개해줘', '어떤 일을 하는 회사야?')\n"
+        "1. **구체적 질문** (예: '비밀번호 변경 방법', '연차 신청은?')\n"
+        "   → search_faq로 하이브리드 검색 (벡터 + 그래프)\n"
+        "   → 결과가 명확하면 바로 답변, 유사 항목이 여러 개면 목록 제시 후 선택 요청\n\n"
+        "2. **탐색적 질문** (예: 'LINE WORKS 메일 관련 기능', '드라이브 기능 알려줘')\n"
+        "   → explore_topic으로 그래프 탐색하여 관련 엔티티 파악\n"
+        "   → 필요시 search_faq로 구체적 문서 검색 추가\n\n"
+        "3. **넓은 탐색 질문** (예: '프로젝트 알려줘', '회사 소개해줘')\n"
         "   → list_titles(source='eluocnc')로 관련 항목 목록 조회\n"
         "   → 그중 대표적인 항목 몇 개를 get_item_detail로 상세 조회\n"
         "   → 조회 결과를 종합하여 자연스럽게 요약 답변\n\n"
-        "2. **특정 주제 질문** (예: '비밀번호 변경 방법', '연차 신청은?')\n"
-        "   → search_faq로 키워드 검색\n"
-        "   → 결과가 명확하면 바로 답변, 유사 항목이 여러 개면 목록 제시 후 선택 요청\n\n"
-        "3. **목록/통계 질문** (예: '게시판 글 목록', '데이터 몇 건이야?')\n"
+        "4. **목록/통계 질문** (예: '게시판 글 목록', '데이터 몇 건이야?')\n"
         "   → list_titles 또는 get_data_stats 사용\n\n"
-        "4. **특정 항목 상세 질문** (예: '이마트 프로젝트 자세히', '경동나비엔 프로젝트 알려줘')\n"
+        "5. **특정 항목 상세 질문** (예: '이마트 프로젝트 자세히', '경동나비엔 프로젝트 알려줘')\n"
         "   → get_item_detail로 바로 상세 조회\n\n"
         "## 데이터 출처 구분\n"
         "- source='faq': LINE WORKS 도움말 FAQ\n"
@@ -249,6 +195,7 @@ faq_agent = Agent(
     ),
     tools=[
         Tool(search_faq, takes_ctx=True),
+        Tool(explore_topic, takes_ctx=True),
         Tool(list_titles, takes_ctx=True),
         Tool(get_item_detail, takes_ctx=True),
         Tool(get_data_stats, takes_ctx=True),
@@ -256,14 +203,14 @@ faq_agent = Agent(
 )
 
 
-def get_faq_db() -> FAQDatabase:
-    """FAQ 데이터베이스를 로드하여 반환한다."""
-    return FAQDatabase().load()
+def get_graph_db() -> GraphRAGDatabase:
+    """GraphRAG 데이터베이스를 로드하여 반환한다."""
+    return GraphRAGDatabase().load()
 
 
 def ask(question: str, message_history=None) -> str:
     """질문에 대한 답변을 반환한다."""
-    db = get_faq_db()
+    db = get_graph_db()
     result = faq_agent.run_sync(
         user_prompt=question,
         deps=db,
