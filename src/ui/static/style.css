@@ -435,53 +435,67 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 }
 
 /* ── 관련 주제 버튼 ── */
-/* stVerticalBlock을 stMarkdownContainer와 동일한 너비로 제한 */
+/* 컨테이너: .related-topics-row 마커를 포함하는 stVerticalBlock 기준 */
 [data-testid="stVerticalBlock"]:has(.related-topics-row) {
     width: 100% !important;
-    padding-left: 16px !important;
-    padding-right: 16px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    gap: 0 !important;
     box-sizing: border-box !important;
 }
-@media (min-width: 864px) {
-    [data-testid="stVerticalBlock"]:has(.related-topics-row) {
-        padding-left: 80px !important;
-        padding-right: 80px !important;
-    }
+[data-testid="stVerticalBlock"]:has(.related-topics-row) .related-topics-row {
+    display: none !important;
 }
-.related-topics-row [data-testid="stHorizontalBlock"] {
-    gap: 8px !important;
-    flex-wrap: wrap !important;
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stHorizontalBlock"] {
+    gap: 0 !important;
+    flex-wrap: nowrap !important;
     justify-content: flex-start !important;
     align-items: stretch !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
-.related-topics-row [data-testid="stColumn"] {
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"] {
     flex: 0 0 auto !important;
     width: auto !important;
     min-width: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
     display: flex !important;
     align-items: stretch !important;
 }
-.related-topics-row [data-testid="stColumn"] > div,
-.related-topics-row [data-testid="stColumn"] > div > div {
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"] > div,
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"] > div > div {
     height: 100% !important;
     display: flex !important;
     align-items: stretch !important;
+    padding: 0 !important;
+    margin: 0 !important;
 }
-.related-topics-row button {
+[data-testid="stVerticalBlock"]:has(.related-topics-row) button {
     width: auto !important;
     min-width: 0 !important;
     height: 100% !important;
-    padding: 6px 16px !important;
-    border-radius: 20px !important;
+    margin: 0 !important;
+    padding: 6px 14px !important;
+    border-radius: 0 !important;
     font-size: 0.82rem !important;
     background: rgba(0, 0, 127, 0.06) !important;
     border: 1px solid rgba(0, 0, 127, 0.15) !important;
     color: var(--brand-navy) !important;
     transition: all var(--transition) !important;
-    white-space: normal !important;
+    white-space: nowrap !important;
     text-align: center !important;
 }
-.related-topics-row button:hover {
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"]:first-of-type button {
+    border-radius: 20px 0 0 20px !important;
+}
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"]:last-of-type button {
+    border-radius: 0 20px 20px 0 !important;
+}
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"] + [data-testid="stColumn"] button {
+    border-left: none !important;
+}
+[data-testid="stVerticalBlock"]:has(.related-topics-row) button:hover {
     background: rgba(0, 0, 127, 0.12) !important;
     border-color: var(--brand-navy) !important;
 }

@@ -48,10 +48,16 @@ _SCROLL_TRIGGER_JS = """<script>
     P.__userScrolled=false;
     var c=doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
     if(c) c.scrollTop=c.scrollHeight;
+    var TH=80;
     P.__autoScrollId=P.setInterval(function(){
-        if(P.__userScrolled)return;
         var c=doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
-        if(c) c.scrollTop=c.scrollHeight;
+        if(!c)return;
+        if(!P.__userScrolled){
+            c.scrollTop=c.scrollHeight;
+        } else if(c.scrollTop+c.clientHeight>=c.scrollHeight-TH){
+            P.__userScrolled=false;
+            c.scrollTop=c.scrollHeight;
+        }
     },150);
 })();
 </script>"""
