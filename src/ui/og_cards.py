@@ -48,7 +48,68 @@ def render_og_cards(text: str, og_cache: list[dict] | None = None):
     for card in cards:
         esc = html_mod.escape
         img_html = f'<img class="og-card-img" src="{esc(card["image"])}" alt="" />' if card.get("image") else ""
-        st.markdown(f"""
+        st.html(f"""
+        <style>
+        .og-card {{
+            display: flex;
+            border: 1px solid #E5E7EB;
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 10px 0;
+            background: #FFFFFF;
+            text-decoration: none;
+            color: inherit;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            max-height: 120px;
+        }}
+        .og-card:hover {{
+            border-color: rgba(0, 0, 127, 0.15);
+            box-shadow: 0 4px 12px rgba(0, 0, 127, 0.06);
+            transform: translateY(-1px);
+        }}
+        .og-card-img {{
+            width: 120px;
+            min-width: 120px;
+            object-fit: cover;
+            background: #F0F0F0;
+        }}
+        .og-card-body {{
+            padding: 12px 16px;
+            overflow: hidden;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            font-family: 'Pretendard Variable', 'Pretendard', -apple-system, sans-serif;
+        }}
+        .og-card-title {{
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: #1A1A2E;
+            margin: 0 0 4px 0;
+            display: -webkit-box;
+            -webkit-line-clamp: 1;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }}
+        .og-card-desc {{
+            font-size: 0.78rem;
+            color: #6B7280;
+            margin: 0 0 6px 0;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            line-height: 1.5;
+        }}
+        .og-card-url {{
+            font-size: 0.68rem;
+            color: #9CA3AF;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        </style>
         <a class="og-card" href="{esc(card['url'])}" target="_blank" rel="noopener">
             {img_html}
             <div class="og-card-body">
@@ -57,5 +118,5 @@ def render_og_cards(text: str, og_cache: list[dict] | None = None):
                 <div class="og-card-url">{esc(card.get('domain', ''))}</div>
             </div>
         </a>
-        """, unsafe_allow_html=True)
+        """)
     return cards

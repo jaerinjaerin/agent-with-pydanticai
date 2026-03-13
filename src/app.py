@@ -1,334 +1,121 @@
 """
-LINE WORKS FAQ 챗봇 Streamlit UI.
+Ask Eluo — Streamlit 채팅 UI.
 
-PydanticAI 에이전트를 활용한 대화형 FAQ 챗봇 인터페이스.
-노션 스타일 도식화 적용.
+PydanticAI 에이전트 기반 사내 지식 검색 챗봇.
 """
 
-import asyncio
+import os
+import re
 import sys
-import threading
 from pathlib import Path
 
-# ── sniffio 패치 (모든 import보다 먼저 실행) ──
-# Streamlit Cloud(uvloop)에서 sniffio가 비동기 백엔드를 감지하지 못하는 문제를 해결.
-# 이 패치는 어떤 라이브러리가 import되기 전에 적용되어야 한다.
-import sniffio
-_sniffio_original = sniffio.current_async_library
-def _patched_sniffio():
-    try:
-        return _sniffio_original()
-    except sniffio.AsyncLibraryNotFoundError:
-        return "asyncio"
-sniffio.current_async_library = _patched_sniffio
+# sniffio 패치 + 백그라운드 루프 — 반드시 첫 번째 import
+from ui.async_runtime import run_async  # noqa: E402
 
 import streamlit as st
-from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+import streamlit.components.v1 as components
 
-# 표준 asyncio 루프를 백그라운드 스레드에서 운영한다.
-# uvloop(Streamlit Cloud)과 완전히 분리된 별도 루프이므로 nest_asyncio 불필요.
-_bg_loop = asyncio.DefaultEventLoopPolicy().new_event_loop()
-
-
-def _run_loop():
-    asyncio.set_event_loop(_bg_loop)
-    _bg_loop.run_forever()
-
-
-_bg_thread = threading.Thread(target=_run_loop, daemon=True)
-_bg_thread.start()
-
-
-def run_async(coro):
-    """백그라운드 표준 asyncio 루프에서 코루틴을 실행한다."""
-    ctx = get_script_run_ctx()
-
-    async def _with_ctx():
-        # 백그라운드 스레드에 Streamlit ScriptRunContext를 전파하여
-        # 'missing ScriptRunContext' 경고를 방지한다.
-        add_script_run_ctx(threading.current_thread(), ctx)
-        return await coro
-
-    future = asyncio.run_coroutine_threadsafe(_with_ctx(), _bg_loop)
-    return future.result()
+# GEMINI_API_KEY → GOOGLE_API_KEY 매핑 (PydanticAI는 GOOGLE_API_KEY 사용)
+if os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY"):
+    os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
 
 # src 디렉토리를 path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.google import GoogleModel
+
 from agent.faq_agent import GraphRAGDatabase, faq_agent, get_graph_db
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_RELATED_TOPIC_RE = re.compile(r"\[관련\s*주제:\s*(.+?)\]")
 
-st.set_page_config(page_title="엘루오 도우미", page_icon="💬", layout="wide")
 
-# ── 노션 스타일 CSS ──
-st.markdown("""
-<style>
-/* 전역 폰트 */
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap');
-html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
+def _parse_related_topics(text: str) -> tuple[str, list[str]]:
+    """답변에서 [관련 주제: ...] 패턴을 추출하고 본문에서 제거한다."""
+    match = _RELATED_TOPIC_RE.search(text)
+    if not match:
+        return text, []
+    topics = [t.strip() for t in match.group(1).split(",") if t.strip()]
+    clean_text = text[:match.start()].rstrip() + text[match.end():]
+    return clean_text.strip(), topics
 
-/* 사이드바 숨김 */
-section[data-testid="stSidebar"] { display: none; }
-[data-testid="collapsedControl"] { display: none; }
 
-/* 데이터 로드 상태 배너 */
-.data-status {
-    background: #f7f6f3;
-    border: 1px solid #e9e9e7;
-    border-radius: 8px;
-    padding: 8px 16px;
-    margin-bottom: 16px;
-    font-size: 0.85rem;
-    color: #37352f;
-    display: flex;
-    gap: 16px;
-    align-items: center;
-}
-.data-status .status-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-.data-status .status-count {
-    font-weight: 600;
-}
-
-/* 채팅 메시지 */
-.stChatMessage { border-radius: 12px; }
-
-/* 참고자료 카드 */
-.ref-card {
-    background: #ffffff;
-    border: 1px solid #e9e9e7;
-    border-radius: 8px;
-    padding: 16px 20px;
-    margin-bottom: 10px;
-    transition: box-shadow 0.2s;
-}
-.ref-card:hover {
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-}
-
-/* 출처 뱃지 */
-.badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    margin-right: 6px;
-    vertical-align: middle;
-}
-.badge-faq {
-    background: #e8f5e9;
-    color: #2e7d32;
-}
-.badge-board {
-    background: #e3f2fd;
-    color: #1565c0;
-}
-.badge-eluocnc {
-    background: #fce4ec;
-    color: #c62828;
-}
-
-/* 유사도 바 */
-.score-bar-bg {
-    background: #f0f0ef;
-    border-radius: 4px;
-    height: 6px;
-    width: 100%;
-    margin-top: 8px;
-}
-.score-bar-fill {
-    height: 6px;
-    border-radius: 4px;
-    background: linear-gradient(90deg, #6c5ce7, #a29bfe);
-}
-
-/* 카드 제목 */
-.ref-title {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: #37352f;
-    margin: 4px 0;
-    line-height: 1.4;
-}
-
-/* 카드 본문 미리보기 */
-.ref-content {
-    font-size: 0.85rem;
-    color: #6b6b6b;
-    margin-top: 6px;
-    line-height: 1.6;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-}
-
-/* 카드 URL */
-.ref-url {
-    font-size: 0.75rem;
-    color: #9b9a97;
-    margin-top: 8px;
-    word-break: break-all;
-}
-.ref-url a { color: #2383e2; text-decoration: none; }
-.ref-url a:hover { text-decoration: underline; }
-
-/* callout 박스 */
-.callout {
-    background: #f7f6f3;
-    border-radius: 8px;
-    padding: 14px 18px;
-    margin: 10px 0;
-    border-left: 3px solid #e9e9e7;
-    font-size: 0.9rem;
-    color: #37352f;
-}
-.callout-icon {
-    margin-right: 8px;
-    font-size: 1.1rem;
-}
-
-/* 구분선 */
-.notion-divider {
-    border: none;
-    border-top: 1px solid #e9e9e7;
-    margin: 16px 0;
-}
-
-/* 섹션 헤더 */
-.section-header {
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: #9b9a97;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 10px;
-}
-
-/* 자동 스크롤 방지 */
-[data-testid="ScrollToBottomContainer"] { display: none !important; }
-[data-testid="stChatMessageContainer"] {
-    overflow-anchor: none !important;
-    scroll-behavior: auto !important;
-}
-.stApp, .stApp * {
-    scroll-behavior: auto !important;
-    scroll-margin: 0 !important;
-    scroll-padding: 0 !important;
-}
-/* expander 열릴 때 스크롤 이동 방지 */
-[data-testid="stExpander"],
-[data-testid="stExpander"] * {
-    scroll-margin-top: 0 !important;
-    scroll-margin-bottom: 0 !important;
-    scroll-snap-align: none !important;
-}
-[data-testid="stExpanderDetails"] {
-    overflow-anchor: none !important;
-}
-
-/* 참고자료 expander 컴팩트 스타일 */
-.ref-expander [data-testid="stExpander"] {
-    border: 1px solid #e9e9e7;
-    border-radius: 8px;
-    margin-top: 8px;
-}
-.ref-expander [data-testid="stExpanderDetails"] {
-    max-height: 300px;
-    overflow-y: auto;
-}
-
-/* 참고자료 카드 컴팩트 */
-.ref-card {
-    padding: 10px 14px !important;
-    margin-bottom: 6px !important;
-}
-.ref-title { font-size: 0.85rem !important; }
-.ref-content {
-    font-size: 0.8rem !important;
-    -webkit-line-clamp: 2 !important;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-st.title("💬 엘루오 도우미")
-st.caption("FAQ 및 사내 규정/업무가이드 관련 질문을 입력해주세요.")
-
-# 자동 스크롤 방지 JS — 프로그래밍적 스크롤을 완전 차단하고 사용자 입력만 허용
-st.markdown("""
-<script>
-(function() {
-    if (window.__scrollLockApplied) return;
-    window.__scrollLockApplied = true;
-
-    // 사용자가 직접 스크롤할 때만 허용 플래그
-    let userInitiated = false;
-    ['wheel', 'touchmove', 'touchstart', 'keydown', 'mousedown'].forEach(evt => {
-        window.addEventListener(evt, () => {
-            userInitiated = true;
-            setTimeout(() => { userInitiated = false; }, 300);
-        }, { capture: true, passive: true });
-    });
-
-    // window.scrollTo / window.scroll 차단
-    const _scrollTo = window.scrollTo.bind(window);
-    window.scrollTo = function(...args) {
-        if (userInitiated) _scrollTo(...args);
-    };
-    window.scroll = function(...args) {
-        if (userInitiated) _scrollTo(...args);
-    };
-
-    // Element.scrollIntoView 차단
-    Element.prototype.scrollIntoView = function() {};
-
-    // ScrollToBottom 버튼 제거
-    new MutationObserver(function() {
-        document.querySelectorAll('[data-testid="ScrollToBottomContainer"]')
-            .forEach(el => el.remove());
-    }).observe(document.body, { childList: true, subtree: true });
+# 자체 완결형 스크롤 트리거 (iframe 내에서 parent document 직접 조작)
+_SCROLL_TRIGGER_JS = """<script>
+(function(){
+    var P=window.parent, doc=P.document;
+    if(P.__autoScrollId){P.clearInterval(P.__autoScrollId);P.__autoScrollId=null;}
+    P.__userScrolled=false;
+    var c=doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
+    if(c) c.scrollTop=c.scrollHeight;
+    var THRESHOLD=80;
+    P.__autoScrollId=P.setInterval(function(){
+        var c=doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
+        if(!c)return;
+        var atBottom=c.scrollTop+c.clientHeight>=c.scrollHeight-THRESHOLD;
+        if(!P.__userScrolled){
+            c.scrollTop=c.scrollHeight;
+        } else if(atBottom){
+            P.__userScrolled=false;
+            c.scrollTop=c.scrollHeight;
+        }
+    },150);
+    P.setTimeout(function(){if(P.__autoScrollId){P.clearInterval(P.__autoScrollId);P.__autoScrollId=null;}},30000);
 })();
-</script>
-""", unsafe_allow_html=True)
+</script>"""
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_STATIC = Path(__file__).resolve().parent / "ui" / "static"
+_AVATAR_BOT = str(_STATIC / "avatar_bot.svg")
+_AVATAR_USER = str(_STATIC / "avatar_user.svg")
+
+st.set_page_config(page_title="Ask Eluo", page_icon="💬", layout="wide")
+
+# ── 모델 선택 ──
+MODEL_OPTIONS = {
+    "Claude Sonnet 4": ("anthropic", "claude-sonnet-4-6"),
+    "Claude Haiku 4.5": ("anthropic", "claude-haiku-4-5"),
+    "Gemini 2.5 Flash": ("google", "gemini-2.5-flash"),
+}
+
+def _build_model(provider: str, model_id: str):
+    if provider == "google":
+        return GoogleModel(model_id)
+    return AnthropicModel(model_id)
+
+# ── CSS / JS 로드 ──
+st.markdown(f"<style>\n{_STATIC.joinpath('style.css').read_text()}\n</style>", unsafe_allow_html=True)
+
+# JS 로드 (components.html은 iframe 생성 → script 실행 보장)
+components.html(
+    f"<script>\n{_STATIC.joinpath('scroll_lock.js').read_text()}\n</script>",
+    height=0,
+)
 
 
 @st.cache_resource
-def load_graph_db() -> GraphRAGDatabase:
-    """GraphRAG 데이터베이스를 로드하고 캐시한다."""
+def load_faq_db() -> GraphRAGDatabase:
+    """FAQ 데이터베이스를 로드하고 캐시한다."""
     return get_graph_db()
 
 
-# GraphRAG DB 로드
+# DB 로드
 try:
-    faq_db = load_graph_db()
-    faq_count = sum(1 for item in faq_db.items if item.get("source", "faq") == "faq")
-    board_count = sum(1 for item in faq_db.items if item.get("source") == "board")
-    eluocnc_count = sum(1 for item in faq_db.items if item.get("source") == "eluocnc")
-    entity_count = sum(
-        1 for _, d in faq_db.graph.nodes(data=True) if d.get("node_type") == "ENTITY"
-    ) if faq_db.graph.number_of_nodes() > 0 else 0
-    edge_count = faq_db.graph.number_of_edges()
+    faq_db = load_faq_db()
+    pinecone_ok = faq_db.pinecone_index is not None
+    badge_class = "connected" if pinecone_ok else "disconnected"
+    badge_text = "Pinecone" if pinecone_ok else "Pinecone 연결 안됨"
     st.markdown(f"""
-    <div class="data-status">
-        <span>✅ 데이터 로드 완료</span>
-        <span class="status-item">📄 FAQ <span class="status-count">{faq_count}</span>개</span>
-        <span class="status-item">📋 게시판 <span class="status-count">{board_count}</span>개</span>
-        <span class="status-item">🏢 홈페이지 <span class="status-count">{eluocnc_count}</span>개</span>
-        <span class="status-item">🔗 Knowledge Graph <span class="status-count">{entity_count}</span> 엔티티, <span class="status-count">{edge_count}</span> 관계</span>
-        <span class="status-item">총 <span class="status-count">{len(faq_db.items)}</span>개</span>
+    <div class="pinecone-badge {badge_class}">
+        <span class="pinecone-dot"></span>
+        {badge_text}
     </div>
     """, unsafe_allow_html=True)
 except FileNotFoundError:
     st.error(
         "데이터가 없습니다. 먼저 크롤러를 실행해주세요:\n\n"
-        "`python src/scraper/faq_scraper.py`\n\n"
-        "`python src/scraper/board_scraper.py`"
+        "`python src/scraper/board_scraper.py`\n\n"
+        "`python src/scraper/eluocnc_scraper.py`"
     )
     st.stop()
 except ValueError as e:
@@ -343,115 +130,132 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "pydantic_history" not in st.session_state:
     st.session_state.pydantic_history = []
-def resolve_image_path(img_path: str) -> Path:
-    """이미지 경로를 절대 경로로 해석한다."""
-    p = Path(img_path)
-    if p.is_absolute():
-        return p
-    return PROJECT_ROOT / p
+if "pending_input" not in st.session_state:
+    st.session_state.pending_input = None
+if "scroll_to_bottom" not in st.session_state:
+    st.session_state.scroll_to_bottom = False
+if "selected_model_label" not in st.session_state:
+    st.session_state.selected_model_label = list(MODEL_OPTIONS.keys())[0]
 
+# 버튼 클릭 후 rerun 시 스크롤 트리거
+if st.session_state.scroll_to_bottom:
+    st.session_state.scroll_to_bottom = False
+    components.html(_SCROLL_TRIGGER_JS, height=0)
 
-def render_ref_card(r: dict):
-    """검색 결과를 노션 스타일 카드로 렌더링한다."""
-    source = r.get("source", "faq")
-    badge_map = {
-        "faq": ("badge-faq", "FAQ"),
-        "board": ("badge-board", "게시판"),
-        "eluocnc": ("badge-eluocnc", "홈페이지"),
-    }
-    badge_class, badge_label = badge_map.get(source, ("badge-faq", source))
-    score = r.get("score", 0)
-    score_pct = min(int(score * 100), 100)
-    content_preview = r.get("content", "")[:200].replace("\n", " ")
-    url = r.get("url", "")
-    url_html = f'<a href="{url}" target="_blank">{url}</a>' if url else "—"
-
-    # 관련 개념 표시
-    concepts = r.get("related_concepts", [])
-    concepts_html = ""
-    if concepts:
-        concepts_str = ", ".join(concepts[:3])
-        concepts_html = f'<div style="font-size:0.75rem; color:#6c5ce7; margin-top:4px;">🔗 {concepts_str}</div>'
-
-    st.markdown(f"""
-    <div class="ref-card">
-        <div>
-            <span class="badge {badge_class}">{badge_label}</span>
-            <span style="font-size:0.75rem; color:#9b9a97;">유사도 {score:.0%}</span>
-        </div>
-        <div class="ref-title">{r.get('title', '')}</div>
-        <div class="ref-content">{content_preview}</div>
-        {concepts_html}
-        <div class="score-bar-bg"><div class="score-bar-fill" style="width:{score_pct}%"></div></div>
-        <div class="ref-url">{url_html}</div>
+# 웰컴 — 대화 시작 전에만 표시
+welcome_slot = st.empty()
+if not st.session_state.messages:
+    welcome_slot.markdown("""
+    <div class="welcome-card">
+        <div class="welcome-greeting">Ask Eluo</div>
     </div>
     """, unsafe_allow_html=True)
 
-
-def render_ref_panel(search_results: list[dict]):
-    """검색 결과 패널을 접을 수 있는 expander로 렌더링한다."""
-    valid = [r for r in search_results if r.get("score", 0) > 0]
-    if not valid:
-        return
-
-    with st.expander(f"📚 참고 자료 ({len(valid)}건)", expanded=False):
-        for r in valid:
-            render_ref_card(r)
-
-            # 첨부파일 이미지
-            images = r.get("images", [])
-            existing = [p for p in images if resolve_image_path(p).exists()]
-            if existing:
-                with st.expander(f"📎 첨부파일 이미지 ({len(existing)}장)"):
-                    for img_path in existing:
-                        st.image(str(resolve_image_path(img_path)))
-
-
-def render_images_from_history(image_groups: list[dict]):
-    """히스토리에 저장된 이미지 그룹을 표시한다."""
-    if not image_groups:
-        return
-    for img_group in image_groups:
-        with st.expander(f"📎 {img_group['title']} — 첨부파일 이미지"):
-            for img_path in img_group["paths"]:
-                resolved = resolve_image_path(img_path)
-                if resolved.exists():
-                    st.image(str(resolved))
-
-
 # 대화 히스토리 표시
 for idx, msg in enumerate(st.session_state.messages):
-    with st.chat_message(msg["role"]):
+    avatar = _AVATAR_BOT if msg["role"] == "assistant" else _AVATAR_USER
+    with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
-        if msg["role"] == "assistant":
-            # 참고자료 패널 재표시
-            if msg.get("references"):
-                render_ref_panel(msg["references"])
-            elif msg.get("images"):
-                render_images_from_history(msg["images"])
+        if msg["role"] == "assistant" and msg.get("related_topics"):
+            with st.container():
+                st.markdown('<div class="related-topics-row">', unsafe_allow_html=True)
+                cols = st.columns(len(msg["related_topics"]) + 1)
+                for col, topic in zip(cols, msg["related_topics"]):
+                    if col.button(f"💡 {topic}", key=f"topic_{idx}_{topic}"):
+                        st.session_state.pending_input = topic
+                        st.session_state.scroll_to_bottom = True
+                        st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
 
-if prompt := st.chat_input("질문을 입력하세요..."):
+# ── 모델 선택 드롭다운 (입력창 바로 위) ──
+selected_model_label = st.selectbox(
+    "모델 선택",
+    options=list(MODEL_OPTIONS.keys()),
+    index=list(MODEL_OPTIONS.keys()).index(st.session_state.selected_model_label),
+    key="selected_model_label",
+    label_visibility="collapsed",
+)
+_provider, _model_id = MODEL_OPTIONS[selected_model_label]
+selected_model = _build_model(_provider, _model_id)
+
+# pending_input이 있으면 자동 실행
+_pending = st.session_state.pending_input
+st.session_state.pending_input = None
+prompt = st.chat_input("질문을 입력하세요...") or _pending
+if prompt:
+    welcome_slot.empty()
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar=_AVATAR_USER):
         st.markdown(prompt)
 
-    with st.chat_message("assistant"):
+    # 하단 스크롤 트리거 (components.html → iframe 내 JS 실행)
+    components.html(_SCROLL_TRIGGER_JS, height=0)
+
+    with st.chat_message("assistant", avatar=_AVATAR_BOT):
         placeholder = st.empty()
 
         async def _stream(user_prompt, deps, history):
-            """PydanticAI 스트리밍으로 답변을 생성한다."""
-            async with faq_agent.run_stream(
+            """PydanticAI run_stream_events로 최종 답변만 스트리밍한다."""
+            import time
+
+            from pydantic_ai import (
+                AgentRunResultEvent,
+                FunctionToolCallEvent,
+                FunctionToolResultEvent,
+                PartDeltaEvent,
+                TextPartDelta,
+            )
+
+            full_text = ""
+            final_output = ""
+            last_render = 0.0
+            render_interval = 0.05
+            _loading_html = """<style>
+@keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
+@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+.dots{display:inline-flex;gap:5px;padding:8px 0}
+.dots span{width:7px;height:7px;border-radius:50%;background:#00007F;
+animation:pulse 1.4s ease-in-out infinite,bounce 1.4s ease-in-out infinite}
+.dots span:nth-child(2){animation-delay:.2s}
+.dots span:nth-child(3){animation-delay:.4s}
+</style><div class="dots"><span></span><span></span><span></span></div>"""
+            placeholder.markdown(_loading_html, unsafe_allow_html=True)
+            print(f"[Model] {_model_id} (provider: {_provider})")
+            all_msgs = []
+            async for event in faq_agent.run_stream_events(
                 user_prompt=user_prompt,
                 deps=deps,
                 message_history=history or None,
-            ) as result:
-                full_text = ""
-                async for chunk in result.stream_text(delta=True):
-                    full_text += chunk
-                    placeholder.markdown(full_text + "▌")
-                placeholder.markdown(full_text)
-                return full_text, result.all_messages()
+                model=selected_model,
+            ):
+                if isinstance(event, AgentRunResultEvent):
+                    all_msgs = event.result.all_messages()
+                    final_output = event.result.output
+                elif isinstance(event, FunctionToolCallEvent):
+                    tool_name = event.part.tool_name
+                    _tool_labels = {
+                        "search_faq": "🔍 검색 중...",
+                        "explore_topic": "🔍 주제 탐색 중...",
+                        "list_titles": "📋 목록 조회 중...",
+                        "get_item_detail": "📄 상세 조회 중...",
+                        "get_data_stats": "📊 통계 조회 중...",
+                    }
+                    status_msg = _tool_labels.get(tool_name, f"⏳ {tool_name} 실행 중...")
+                    placeholder.markdown(status_msg)
+                elif isinstance(event, FunctionToolResultEvent):
+                    full_text = ""
+                elif isinstance(event, PartDeltaEvent):
+                    if isinstance(event.delta, TextPartDelta):
+                        full_text += event.delta.content_delta
+                        now = time.monotonic()
+                        if now - last_render >= render_interval:
+                            placeholder.markdown(full_text)
+                            last_render = now
+            answer = final_output or full_text or "답변을 생성하지 못했습니다."
+            placeholder.markdown(answer)
+            return answer, all_msgs
 
+        related_topics = []
         try:
             answer, all_messages = run_async(
                 _stream(prompt, faq_db, st.session_state.pydantic_history)
@@ -464,24 +268,39 @@ if prompt := st.chat_input("질문을 입력하세요..."):
                 )
                 st.session_state.pydantic_history = all_messages
             except Exception as e:
-                answer = f"죄송합니다. 오류가 발생했습니다: {e}"
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "rate" in err_str.lower():
+                    answer = (
+                        "⚠️ 현재 선택된 모델의 API 호출 한도에 도달했습니다.\n\n"
+                        "다른 모델을 선택하거나 잠시 후 다시 시도해주세요."
+                    )
+                else:
+                    answer = f"죄송합니다. 오류가 발생했습니다: {e}"
                 placeholder.markdown(answer)
 
-        # 참고자료 패널
-        search_results = faq_db.hybrid_search(prompt, top_k=3)
-        render_ref_panel(search_results)
+        # 관련 주제 파싱 및 버튼 렌더링
+        clean_answer, related_topics = _parse_related_topics(answer)
+        if clean_answer != answer:
+            answer = clean_answer
+            placeholder.markdown(answer)
 
-        # 이미지 경로 수집 (히스토리 저장용)
-        image_groups = []
-        for r in search_results:
-            images = r.get("images", [])
-            existing = [p for p in images if resolve_image_path(p).exists()]
-            if existing:
-                image_groups.append({"title": r["title"], "paths": existing})
+
+
+        # 관련 주제 버튼 렌더링
+        if related_topics:
+            with st.container():
+                st.markdown('<div class="related-topics-row">', unsafe_allow_html=True)
+                msg_idx = len(st.session_state.messages)
+                cols = st.columns(len(related_topics) + 1)
+                for col, topic in zip(cols, related_topics):
+                    if col.button(f"💡 {topic}", key=f"topic_{msg_idx}_{topic}"):
+                        st.session_state.pending_input = topic
+                        st.session_state.scroll_to_bottom = True
+                        st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
 
     st.session_state.messages.append({
         "role": "assistant",
         "content": answer,
-        "references": search_results,
-        "images": image_groups,
+        "related_topics": related_topics if related_topics else [],
     })

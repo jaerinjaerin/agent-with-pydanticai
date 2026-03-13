@@ -4,6 +4,37 @@
    Font: Pretendard
    ═══════════════════════════════════════════════════ */
 
+/* ── 로딩 애니메이션 ── */
+@keyframes thinking-pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+}
+@keyframes thinking-bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+}
+.thinking-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 0;
+    color: var(--fg-muted, #6B7280);
+    font-size: 14px;
+}
+.thinking-dots {
+    display: inline-flex;
+    gap: 4px;
+}
+.thinking-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--brand-navy, #00007F);
+    animation: thinking-pulse 1.4s ease-in-out infinite, thinking-bounce 1.4s ease-in-out infinite;
+}
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
 /* ── Pretendard 웹폰트 ── */
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
 
@@ -142,6 +173,70 @@ section[data-testid="stSidebar"] { display: none; }
 /* 아바타 — SVG 커스텀 아이콘 사용, 둥근 사각형 */
 [data-testid="stChatMessage"] img[data-testid="chatAvatarIcon-image"] {
     border-radius: 8px !important;
+}
+
+/* ── 모델 선택 드롭다운 (입력창 하단 고정) ── */
+div[data-testid="stSelectbox"]:has(div[data-baseweb="select"]) {
+    position: fixed;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 99998;
+    width: auto;
+    min-width: 200px;
+}
+div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+    background: var(--bg-chat) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 20px !important;
+    padding: 0 16px !important;
+    font-size: 0.75rem !important;
+    font-weight: 500 !important;
+    color: var(--fg-muted) !important;
+    min-height: unset !important;
+    height: 32px !important;
+    width: fit-content !important;
+    display: flex !important;
+    align-items: center !important;
+    cursor: pointer;
+    transition: all var(--transition);
+    box-shadow: var(--shadow-sm);
+}
+/* 내부 컨테이너도 flex 정렬 */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] > div > div {
+    display: flex !important;
+    align-items: center !important;
+}
+div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:hover {
+    border-color: rgba(0, 0, 127, 0.2) !important;
+    box-shadow: var(--shadow-md);
+}
+/* 텍스트 잘림 방지 — value div + 내부 모든 요소 */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value],
+div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
+div[data-testid="stSelectbox"] div[data-baseweb="select"] span {
+    overflow: visible !important;
+    text-overflow: unset !important;
+    white-space: nowrap !important;
+    max-width: none !important;
+}
+div[data-testid="stSelectbox"] svg {
+    width: 12px !important;
+    height: 12px !important;
+    color: var(--fg-subtle) !important;
+    flex-shrink: 0;
+    margin-left: 6px !important;
+}
+/* value 텍스트 라인 높이 통일 */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value] {
+    line-height: 1 !important;
+    display: flex !important;
+    align-items: center !important;
+}
+/* 커서를 pointer로 통일 (내부 input의 text 커서 제거) */
+div[data-testid="stSelectbox"] div[data-baseweb="select"],
+div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
+    cursor: pointer !important;
 }
 
 /* ── 채팅 입력창 ── */
@@ -337,6 +432,33 @@ section[data-testid="stSidebar"] { display: none; }
 /* 에러 메시지 */
 .stAlert {
     border-radius: var(--radius) !important;
+}
+
+/* ── 관련 주제 버튼 ── */
+.related-topics-row [data-testid="stHorizontalBlock"] {
+    gap: 8px !important;
+    flex-wrap: wrap;
+}
+.related-topics-row button {
+    width: auto !important;
+    min-width: 0 !important;
+    padding: 6px 16px !important;
+    border-radius: 20px !important;
+    font-size: 0.82rem !important;
+    background: rgba(0, 0, 127, 0.06) !important;
+    border: 1px solid rgba(0, 0, 127, 0.15) !important;
+    color: var(--brand-navy) !important;
+    white-space: nowrap !important;
+    transition: all var(--transition) !important;
+}
+.related-topics-row button:hover {
+    background: rgba(0, 0, 127, 0.12) !important;
+    border-color: var(--brand-navy) !important;
+}
+.related-topics-row [data-testid="stColumn"] {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
 }
 
 /* ── 반응형 ── */
