@@ -86,14 +86,13 @@ class GraphRAGDatabase:
         unique_items = []
         for item in self.items:
             url = item.get("url", "")
-            base_url = url.split("?")[0] if url else ""
             content = item.get("content", "").strip()
             if len(content) < 50:
                 continue
-            if base_url and base_url in seen_urls:
+            if url and url in seen_urls:
                 continue
-            if base_url:
-                seen_urls.add(base_url)
+            if url:
+                seen_urls.add(url)
             unique_items.append(item)
         self.items = unique_items
 
