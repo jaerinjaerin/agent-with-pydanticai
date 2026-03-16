@@ -38,6 +38,7 @@ GRAPH_PATH = DATA_DIR / "knowledge_graph.json"
 ENTITY_EMBEDDINGS_PATH = DATA_DIR / "entity_embeddings.npz"
 BOARD_DATA_PATH = DATA_DIR / "board_lineworks.json"
 ELUOCNC_DATA_PATH = DATA_DIR / "eluocnc.json"
+ADMIN_DATA_PATH = DATA_DIR / "admin_documents.json"
 
 
 @dataclass
@@ -59,7 +60,7 @@ class GraphRAGDatabase:
 
         # ── 1. JSON 데이터 로드 (faq_lineworks.json 제외) ──
         if paths is None:
-            paths = [BOARD_DATA_PATH, ELUOCNC_DATA_PATH]
+            paths = [BOARD_DATA_PATH, ELUOCNC_DATA_PATH, ADMIN_DATA_PATH]
 
         self.items = []
         for path in paths:
@@ -72,6 +73,8 @@ class GraphRAGDatabase:
                     default_source = "eluocnc"
                 elif "board" in path.name:
                     default_source = "board"
+                elif "admin" in path.name:
+                    default_source = "admin"
                 else:
                     default_source = "faq"
                 for item in items:
@@ -184,13 +187,19 @@ class GraphRAGDatabase:
             meta = r.get("metadata", {})
             url = meta.get("url", r.get("url", ""))
             item = self._find_item_by_url(url)
+            images = self._collect_images(item)
+            # 이미지 타입 벡터에서 직접 경로 추가
+            if meta.get("type") == "image" and meta.get("image_path"):
+                img_path = meta["image_path"]
+                if img_path not in images:
+                    images.insert(0, img_path)
             results.append({
                 "title": meta.get("title", r.get("title", "")),
                 "content": meta.get("content", meta.get("text", r.get("content", "")))[:500],
                 "url": url,
                 "source": meta.get("source", r.get("source", "")),
                 "score": float(r.get("score", 0)),
-                "images": self._collect_images(item),
+                "images": images,
             })
         return results
 

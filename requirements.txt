@@ -11,3 +11,5 @@ requests>=2.31.0
 networkx>=3.2
 sentence-transformers>=2.2.0
 pinecone>=5.0.0
+python-pptx>=0.6.0
+filelock>=3.12.0

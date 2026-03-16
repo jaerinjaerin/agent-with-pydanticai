@@ -44,6 +44,9 @@ def search_faq(ctx: RunContext[GraphRAGDatabase], query: str) -> str:
         concepts = r.get("related_entities", [])
         if concepts:
             part += f"\n관련 개념: {', '.join(concepts[:3])}"
+        images = r.get("images", [])
+        if images:
+            part += f"\n첨부 이미지: {', '.join(images[:5])}"
         output_parts.append(part)
     return "\n\n".join(output_parts)
 
@@ -187,7 +190,12 @@ faq_agent = Agent(
         "- 답변 끝에 출처(FAQ/게시판/회사 홈페이지)와 관련 URL을 함께 제공하세요.\n"
         "- 검색 결과가 없거나 관련이 없는 경우, 솔직하게 모른다고 답변하세요.\n"
         "- **답변 마지막에 반드시 `[관련 주제: 주제1, 주제2, 주제3]` 형식으로 관련 주제 2~3개를 제안하세요.**\n"
-        "  검색 결과의 관련 개념이나 연관 키워드에서 선택하세요."
+        "  검색 결과의 관련 개념이나 연관 키워드에서 선택하세요.\n\n"
+        "## 이미지 제공 규칙\n"
+        "- 검색 결과에 '첨부 이미지' 경로가 포함되어 있으면, 답변 본문 중 관련 위치에 `[IMAGE: 경로]` 형식으로 삽입하세요.\n"
+        "- 예: `[IMAGE: data/board_images/비용정산신청_p1.png]`\n"
+        "- 이미지가 여러 장이면 답변 흐름에 맞게 적절한 위치에 각각 삽입하세요.\n"
+        "- 이미지 경로는 검색 결과에서 제공된 것만 사용하고, 임의로 만들지 마세요."
     ),
     tools=[
         Tool(search_faq, takes_ctx=True),

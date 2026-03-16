@@ -6,7 +6,7 @@ PDF, DOCX, XLSX, HWP 파일에서 텍스트를 추출한다.
 
 from pathlib import Path
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".hwp"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".hwp", ".pptx", ".md"}
 
 
 def extract_text(file_path: Path) -> str:
@@ -21,6 +21,10 @@ def extract_text(file_path: Path) -> str:
         return _extract_xlsx(file_path)
     elif ext == ".hwp":
         return _extract_hwp(file_path)
+    elif ext == ".pptx":
+        return _extract_pptx(file_path)
+    elif ext == ".md":
+        return _extract_md(file_path)
     else:
         print(f"[skip] 지원하지 않는 파일 형식: {file_path.name}")
         return ""
@@ -117,6 +121,30 @@ def _extract_xlsx(file_path: Path) -> str:
                 text_parts.append("\t".join(cells))
     wb.close()
     return "\n".join(text_parts)
+
+
+def _extract_pptx(file_path: Path) -> str:
+    """python-pptx로 PPTX 슬라이드별 텍스트를 추출한다."""
+    from pptx import Presentation
+
+    prs = Presentation(file_path)
+    text_parts = []
+    for i, slide in enumerate(prs.slides, 1):
+        slide_texts = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        slide_texts.append(text)
+        if slide_texts:
+            text_parts.append(f"[슬라이드 {i}]\n" + "\n".join(slide_texts))
+    return "\n\n".join(text_parts)
+
+
+def _extract_md(file_path: Path) -> str:
+    """마크다운 파일을 UTF-8 텍스트로 읽는다."""
+    return file_path.read_text(encoding="utf-8")
 
 
 def _extract_hwp(file_path: Path) -> str:

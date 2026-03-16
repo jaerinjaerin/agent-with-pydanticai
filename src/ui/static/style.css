@@ -6,13 +6,29 @@
 
 /* ── 로딩 애니메이션 ── */
 @keyframes thinking-pulse {
-    0%, 100% { opacity: 0.3; }
-    50% { opacity: 1; }
+
+    0%,
+    100% {
+        opacity: 0.3;
+    }
+
+    50% {
+        opacity: 1;
+    }
 }
+
 @keyframes thinking-bounce {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-4px); }
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-4px);
+    }
 }
+
 .thinking-indicator {
     display: inline-flex;
     align-items: center;
@@ -21,10 +37,12 @@
     color: var(--fg-muted, #6B7280);
     font-size: 14px;
 }
+
 .thinking-dots {
     display: inline-flex;
     gap: 4px;
 }
+
 .thinking-dots span {
     width: 6px;
     height: 6px;
@@ -32,8 +50,14 @@
     background: var(--brand-navy, #00007F);
     animation: thinking-pulse 1.4s ease-in-out infinite, thinking-bounce 1.4s ease-in-out infinite;
 }
-.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
-.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+.thinking-dots span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.thinking-dots span:nth-child(3) {
+    animation-delay: 0.4s;
+}
 
 /* ── Pretendard 웹폰트 ── */
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
@@ -65,7 +89,9 @@
 }
 
 /* ── Global Reset ── */
-html, body, [class*="css"] {
+html,
+body,
+[class*="css"] {
     font-family: 'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif !important;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -80,11 +106,18 @@ html, body, [class*="css"] {
 }
 
 /* ── 사이드바 숨김 ── */
-section[data-testid="stSidebar"] { display: none; }
-[data-testid="collapsedControl"] { display: none; }
+section[data-testid="stSidebar"] {
+    display: none;
+}
+
+[data-testid="collapsedControl"] {
+    display: none;
+}
 
 /* ── Header 영역 ── */
-.stApp > header { background: transparent !important; }
+.stApp>header {
+    background: transparent !important;
+}
 
 /* ── Pinecone 연결 뱃지 ── */
 .pinecone-badge {
@@ -104,34 +137,46 @@ section[data-testid="stSidebar"] { display: none; }
     -webkit-backdrop-filter: blur(8px);
     transition: all var(--transition);
 }
+
 .pinecone-badge.connected {
     background: rgba(220, 252, 231, 0.85);
     border: 1px solid rgba(134, 239, 172, 0.5);
     color: #15803d;
 }
+
 .pinecone-badge.disconnected {
     background: rgba(254, 226, 226, 0.85);
     border: 1px solid rgba(252, 165, 165, 0.5);
     color: #dc2626;
 }
+
 .pinecone-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     display: inline-block;
 }
+
 .connected .pinecone-dot {
     background: #22c55e;
     box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
     animation: pulse-dot 2s ease-in-out infinite;
 }
+
 .disconnected .pinecone-dot {
     background: #ef4444;
 }
 
 @keyframes pulse-dot {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
 }
 
 /* ── 웰컴 카드 ── */
@@ -185,7 +230,8 @@ div[data-testid="stSelectbox"]:has(div[data-baseweb="select"]) {
     width: auto;
     min-width: 200px;
 }
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+
+div[data-testid="stSelectbox"] div[data-baseweb="select"]>div {
     background: var(--bg-chat) !important;
     border: 1px solid var(--border) !important;
     border-radius: 20px !important;
@@ -202,15 +248,18 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
     transition: all var(--transition);
     box-shadow: var(--shadow-sm);
 }
+
 /* 내부 컨테이너도 flex 정렬 */
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div > div {
+div[data-testid="stSelectbox"] div[data-baseweb="select"]>div>div {
     display: flex !important;
     align-items: center !important;
 }
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:hover {
+
+div[data-testid="stSelectbox"] div[data-baseweb="select"]>div:hover {
     border-color: rgba(0, 0, 127, 0.2) !important;
     box-shadow: var(--shadow-md);
 }
+
 /* 텍스트 잘림 방지 — value div + 내부 모든 요소 */
 div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value],
 div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
@@ -220,6 +269,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] span {
     white-space: nowrap !important;
     max-width: none !important;
 }
+
 div[data-testid="stSelectbox"] svg {
     width: 12px !important;
     height: 12px !important;
@@ -227,12 +277,14 @@ div[data-testid="stSelectbox"] svg {
     flex-shrink: 0;
     margin-left: 6px !important;
 }
+
 /* value 텍스트 라인 높이 통일 */
 div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value] {
     line-height: 1 !important;
     display: flex !important;
     align-items: center !important;
 }
+
 /* 커서를 pointer로 통일 (내부 input의 text 커서 제거) */
 div[data-testid="stSelectbox"] div[data-baseweb="select"],
 div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
@@ -243,6 +295,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 [data-testid="stChatInput"] {
     border-radius: var(--radius) !important;
 }
+
 [data-testid="stChatInput"] textarea {
     border-radius: var(--radius) !important;
     border: 1.5px solid var(--border) !important;
@@ -252,6 +305,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     transition: border-color var(--transition), box-shadow var(--transition) !important;
     box-shadow: var(--shadow-sm) !important;
 }
+
 [data-testid="stChatInput"] textarea:focus,
 [data-testid="stChatInput"] textarea:focus-visible,
 [data-testid="stChatInput"] textarea:focus-within {
@@ -262,22 +316,26 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     outline-color: transparent !important;
     caret-color: var(--fg) !important;
 }
+
 /* Streamlit 기본 포커스 링 완전 제거 */
 [data-testid="stChatInput"] *:focus,
 [data-testid="stChatInput"] *:focus-visible {
     outline: none !important;
     box-shadow: none !important;
 }
+
 /* Streamlit emotion 포커스 border 제거 */
-[data-testid="stChatInput"] > div {
+[data-testid="stChatInput"]>div {
     border-color: transparent !important;
     box-shadow: none !important;
     outline: none !important;
 }
-[data-testid="stChatInput"] > div:focus-within {
+
+[data-testid="stChatInput"]>div:focus-within {
     border-color: transparent !important;
     box-shadow: none !important;
 }
+
 [data-testid="stChatInput"] textarea::placeholder {
     color: var(--fg-subtle) !important;
     font-weight: 400;
@@ -290,6 +348,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     border-radius: 8px !important;
     transition: all var(--transition) !important;
 }
+
 [data-testid="stChatInput"] button:hover {
     opacity: 0.88;
     transform: scale(1.04);
@@ -308,17 +367,20 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     transition: all var(--transition);
     max-height: 120px;
 }
+
 .og-card:hover {
     border-color: rgba(0, 0, 127, 0.15);
     box-shadow: var(--shadow-md);
     transform: translateY(-1px);
 }
+
 .og-card-img {
     width: 120px;
     min-width: 120px;
     object-fit: cover;
     background: var(--brand-light);
 }
+
 .og-card-body {
     padding: 12px 16px;
     overflow: hidden;
@@ -327,6 +389,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     flex-direction: column;
     justify-content: center;
 }
+
 .og-card-title {
     font-size: 0.88rem;
     font-weight: 600;
@@ -337,6 +400,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
+
 .og-card-desc {
     font-size: 0.78rem;
     color: var(--fg-muted);
@@ -347,6 +411,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     overflow: hidden;
     line-height: 1.5;
 }
+
 .og-card-url {
     font-size: 0.68rem;
     color: var(--fg-subtle);
@@ -365,6 +430,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     font-size: 0.88rem;
     color: var(--fg);
 }
+
 .callout-icon {
     margin-right: 8px;
     font-size: 1.05rem;
@@ -378,22 +444,29 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 }
 
 /* ── 스크롤 관련 ── */
-[data-testid="ScrollToBottomContainer"] { display: none !important; }
+[data-testid="ScrollToBottomContainer"] {
+    display: none !important;
+}
+
 [data-testid="stChatMessageContainer"] {
     overflow-anchor: none !important;
     scroll-behavior: auto !important;
 }
-.stApp, .stApp * {
+
+.stApp,
+.stApp * {
     scroll-behavior: auto !important;
     scroll-margin: 0 !important;
     scroll-padding: 0 !important;
 }
+
 [data-testid="stExpander"],
 [data-testid="stExpander"] * {
     scroll-margin-top: 0 !important;
     scroll-margin-bottom: 0 !important;
     scroll-snap-align: none !important;
 }
+
 [data-testid="stExpanderDetails"] {
     overflow-anchor: none !important;
 }
@@ -425,6 +498,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     text-underline-offset: 3px;
     transition: text-decoration-color var(--transition);
 }
+
 .stMarkdown a:hover {
     text-decoration-color: var(--brand-navy) !important;
 }
@@ -436,24 +510,33 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 
 /* ── 관련 주제 버튼 ── */
 /* 컨테이너: .related-topics-row 마커를 포함하는 stVerticalBlock 기준 */
+/* chat_message 밖에 렌더링되므로 assistant 버블에 시각적으로 붙이기 */
 [data-testid="stVerticalBlock"]:has(.related-topics-row) {
     width: 100% !important;
-    padding: 0 !important;
-    margin: 0 !important;
+    padding: 4px 16px 10px !important;
+    margin-top: -12px !important;
     gap: 0 !important;
     box-sizing: border-box !important;
+    background: var(--bg-chat) !important;
+    border: 1px solid var(--border-light) !important;
+    border-top: none !important;
+    border-radius: 0 0 var(--radius) var(--radius) !important;
+    box-shadow: var(--shadow-sm) !important;
 }
+
 [data-testid="stVerticalBlock"]:has(.related-topics-row) .related-topics-row {
     display: none !important;
 }
+
 [data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stHorizontalBlock"] {
-    gap: 0 !important;
+    gap: 10px !important;
     flex-wrap: nowrap !important;
     justify-content: flex-start !important;
     align-items: stretch !important;
     margin: 0 !important;
     padding: 0 !important;
 }
+
 [data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"] {
     flex: 0 0 auto !important;
     width: auto !important;
@@ -463,21 +546,23 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     display: flex !important;
     align-items: stretch !important;
 }
-[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"] > div,
-[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"] > div > div {
+
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"]>div,
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"]>div>div {
     height: 100% !important;
     display: flex !important;
     align-items: stretch !important;
     padding: 0 !important;
     margin: 0 !important;
 }
+
 [data-testid="stVerticalBlock"]:has(.related-topics-row) button {
     width: auto !important;
     min-width: 0 !important;
     height: 100% !important;
     margin: 0 !important;
     padding: 6px 14px !important;
-    border-radius: 0 !important;
+    border-radius: var(--radius-sm) !important;
     font-size: 0.82rem !important;
     background: rgba(0, 0, 127, 0.06) !important;
     border: 1px solid rgba(0, 0, 127, 0.15) !important;
@@ -486,15 +571,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     white-space: nowrap !important;
     text-align: center !important;
 }
-[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"]:first-of-type button {
-    border-radius: 20px 0 0 20px !important;
-}
-[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"]:last-of-type button {
-    border-radius: 0 20px 20px 0 !important;
-}
-[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"] + [data-testid="stColumn"] button {
-    border-left: none !important;
-}
+
 [data-testid="stVerticalBlock"]:has(.related-topics-row) button:hover {
     background: rgba(0, 0, 127, 0.12) !important;
     border-color: var(--brand-navy) !important;
@@ -505,13 +582,24 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     .welcome-card {
         padding: 48px 16px;
     }
+
     .welcome-greeting {
         font-size: 1.25rem;
     }
+
     .pinecone-badge {
         top: 12px;
         right: 12px;
         font-size: 0.62rem;
         padding: 4px 10px;
+    }
+
+    /* 관련 주제 버튼 줄바꿈 */
+    [data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
+
+    [data-testid="stVerticalBlock"]:has(.related-topics-row) button {
+        white-space: normal !important;
     }
 }
