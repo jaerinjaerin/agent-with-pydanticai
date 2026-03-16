@@ -62,31 +62,11 @@ def _render_message_with_images(text: str) -> None:
                 st.caption(f"(이미지를 찾을 수 없습니다: {part.strip()})")
 
 
-# 자체 완결형 스크롤 트리거 (iframe 내에서 parent document 직접 조작)
+# 자체 완결형 스크롤 트리거 (iframe 내에서 parent document 직접 조작, 1회성)
 _SCROLL_TRIGGER_JS = """<script>
 (function(){
-    var P=window.parent, doc=P.document;
-    if(P.__autoScrollId){P.clearInterval(P.__autoScrollId);P.__autoScrollId=null;}
-    P.__userScrolled=false;
-    var c=doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
+    var c=window.parent.document.querySelector('[data-testid="stAppScrollToBottomContainer"]');
     if(c) c.scrollTop=c.scrollHeight;
-    P.__autoScrollId=P.setInterval(function(){
-        if(P.__userScrolled){
-            P.clearInterval(P.__autoScrollId);
-            P.__autoScrollId=null;
-            return;
-        }
-        var c=doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
-        if(c) c.scrollTop=c.scrollHeight;
-    },150);
-})();
-</script>"""
-
-# 스트리밍 완료 후 자동 스크롤 중단
-_SCROLL_STOP_JS = """<script>
-(function(){
-    var P=window.parent;
-    if(P.__autoScrollId){P.clearInterval(P.__autoScrollId);P.__autoScrollId=null;}
 })();
 </script>"""
 
@@ -321,9 +301,6 @@ animation:pulse 1.4s ease-in-out infinite,bounce 1.4s ease-in-out infinite}
         if _IMAGE_RE.search(answer):
             placeholder.empty()
             _render_message_with_images(answer)
-
-    # 스트리밍 완료 — 자동 스크롤 중단
-    components.html(_SCROLL_STOP_JS, height=0)
 
     # 관련 주제 버튼 렌더링 (chat_message 밖 — 위젯 트리 안정성 확보)
     if related_topics:
