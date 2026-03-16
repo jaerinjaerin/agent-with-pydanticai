@@ -180,6 +180,93 @@ def build_networkx_graph(
     return G
 
 
+async def add_doc_to_graph(
+    graph: nx.Graph, doc: dict, embed_model=None
+) -> nx.Graph:
+    """단일 문서를 기존 그래프에 추가한다.
+
+    엔티티/관계를 추출하고, DOCUMENT 노드 + ENTITY 노드/엣지를 추가한다.
+    기존 엔티티와 이름이 동일하면 병합한다.
+    """
+    title = doc.get("title", "")
+    content = doc.get("content", "")
+    url = doc.get("url", "")
+
+    # 엔티티/관계 추출
+    extraction = await extract_entities_from_doc(title, content)
+
+    # DOCUMENT 노드 ID: URL 기반
+    doc_node_id = f"doc_url_{url}"
+    graph.add_node(
+        doc_node_id,
+        node_type="DOCUMENT",
+        title=title,
+        url=url,
+        source=doc.get("source", "admin"),
+    )
+
+    # 엔티티 노드 + 관계 엣지 추가
+    for entity in extraction.entities:
+        name = entity.name
+        if graph.has_node(name):
+            # 기존 엔티티에 문서 ID 추가
+            existing_docs = graph.nodes[name].get("document_ids", [])
+            if doc_node_id not in existing_docs:
+                existing_docs.append(doc_node_id)
+                graph.nodes[name]["document_ids"] = existing_docs
+        else:
+            graph.add_node(
+                name,
+                node_type="ENTITY",
+                entity_type=entity.entity_type,
+                description=entity.description,
+                document_ids=[doc_node_id],
+            )
+        graph.add_edge(doc_node_id, name, relation="MENTIONS")
+
+    for rel in extraction.relationships:
+        if graph.has_node(rel.source) and graph.has_node(rel.target):
+            graph.add_edge(
+                rel.source, rel.target,
+                relation=rel.relation, description=rel.description,
+            )
+
+    return graph
+
+
+def remove_doc_from_graph(graph: nx.Graph, doc_url: str) -> nx.Graph:
+    """URL에 해당하는 DOCUMENT 노드를 그래프에서 제거한다.
+
+    연결된 엔티티 중 다른 문서와 연결이 없는 고아 엔티티도 함께 제거한다.
+    """
+    doc_node_id = f"doc_url_{doc_url}"
+    if not graph.has_node(doc_node_id):
+        return graph
+
+    # 연결된 엔티티 노드 목록
+    neighbors = list(graph.neighbors(doc_node_id))
+
+    # 문서 노드 제거
+    graph.remove_node(doc_node_id)
+
+    # 고아 엔티티 정리: 다른 DOCUMENT 노드와 연결이 없는 엔티티 제거
+    for neighbor in neighbors:
+        if not graph.has_node(neighbor):
+            continue
+        node_data = graph.nodes.get(neighbor, {})
+        if node_data.get("node_type") != "ENTITY":
+            continue
+        # 이 엔티티에 연결된 DOCUMENT 노드가 남아있는지 확인
+        has_doc_connection = any(
+            graph.nodes.get(n, {}).get("node_type") == "DOCUMENT"
+            for n in graph.neighbors(neighbor)
+        )
+        if not has_doc_connection:
+            graph.remove_node(neighbor)
+
+    return graph
+
+
 def save_graph(G: nx.Graph, path: Path) -> None:
     """그래프를 JSON 파일로 직렬화한다."""
     data = nx.node_link_data(G)

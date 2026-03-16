@@ -28,6 +28,7 @@ from pydantic_ai.models.google import GoogleModel
 from agent.faq_agent import GraphRAGDatabase, faq_agent, get_graph_db
 
 _RELATED_TOPIC_RE = re.compile(r"\[관련\s*주제:\s*(.+?)\]")
+_IMAGE_RE = re.compile(r"\[IMAGE:\s*(.+?)\]")
 
 
 def _parse_related_topics(text: str) -> tuple[str, list[str]]:
@@ -40,6 +41,27 @@ def _parse_related_topics(text: str) -> tuple[str, list[str]]:
     return clean_text.strip(), topics
 
 
+def _render_message_with_images(text: str) -> None:
+    """[IMAGE: 경로] 패턴을 파싱하여 텍스트와 이미지를 인라인으로 렌더링한다."""
+    parts = _IMAGE_RE.split(text)
+    # split 결과: [텍스트, 이미지경로, 텍스트, 이미지경로, ...]
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            # 텍스트 부분
+            stripped = part.strip()
+            if stripped:
+                st.markdown(stripped)
+        else:
+            # 이미지 경로 부분
+            img_path = PROJECT_ROOT / part.strip()
+            if img_path.exists():
+                col, _, _ = st.columns([1, 2, 0.01])
+                with col:
+                    st.image(str(img_path), use_container_width=True)
+            else:
+                st.caption(f"(이미지를 찾을 수 없습니다: {part.strip()})")
+
+
 # 자체 완결형 스크롤 트리거 (iframe 내에서 parent document 직접 조작)
 _SCROLL_TRIGGER_JS = """<script>
 (function(){
@@ -49,7 +71,11 @@ _SCROLL_TRIGGER_JS = """<script>
     var c=doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
     if(c) c.scrollTop=c.scrollHeight;
     P.__autoScrollId=P.setInterval(function(){
-        if(P.__userScrolled)return;
+        if(P.__userScrolled){
+            P.clearInterval(P.__autoScrollId);
+            P.__autoScrollId=null;
+            return;
+        }
         var c=doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
         if(c) c.scrollTop=c.scrollHeight;
     },150);
@@ -61,7 +87,6 @@ _SCROLL_STOP_JS = """<script>
 (function(){
     var P=window.parent;
     if(P.__autoScrollId){P.clearInterval(P.__autoScrollId);P.__autoScrollId=null;}
-    P.__userScrolled=true;
 })();
 </script>"""
 
@@ -74,9 +99,9 @@ st.set_page_config(page_title="Ask Eluo", page_icon="💬", layout="wide")
 
 # ── 모델 선택 ──
 MODEL_OPTIONS = {
+    "Gemini 2.5 Flash": ("google", "gemini-2.5-flash"),
     "Claude Sonnet 4": ("anthropic", "claude-sonnet-4-6"),
     "Claude Haiku 4.5": ("anthropic", "claude-haiku-4-5"),
-    "Gemini 2.5 Flash": ("google", "gemini-2.5-flash"),
 }
 
 def _build_model(provider: str, model_id: str):
@@ -135,8 +160,8 @@ if "pending_input" not in st.session_state:
     st.session_state.pending_input = None
 if "scroll_to_bottom" not in st.session_state:
     st.session_state.scroll_to_bottom = False
-if "selected_model_label" not in st.session_state:
-    st.session_state.selected_model_label = list(MODEL_OPTIONS.keys())[0]
+if "model_choice" not in st.session_state:
+    st.session_state.model_choice = list(MODEL_OPTIONS.keys())[0]
 
 # 버튼 클릭 후 rerun 시 스크롤 트리거
 if st.session_state.scroll_to_bottom:
@@ -156,7 +181,10 @@ if not st.session_state.messages:
 for idx, msg in enumerate(st.session_state.messages):
     avatar = _AVATAR_BOT if msg["role"] == "assistant" else _AVATAR_USER
     with st.chat_message(msg["role"], avatar=avatar):
-        st.markdown(msg["content"])
+        if msg["role"] == "assistant" and _IMAGE_RE.search(msg["content"]):
+            _render_message_with_images(msg["content"])
+        else:
+            st.markdown(msg["content"])
     if msg["role"] == "assistant" and msg.get("related_topics"):
         with st.container():
             st.markdown('<div class="related-topics-row">', unsafe_allow_html=True)
@@ -169,14 +197,18 @@ for idx, msg in enumerate(st.session_state.messages):
             st.markdown('</div>', unsafe_allow_html=True)
 
 # ── 모델 선택 드롭다운 (입력창 바로 위) ──
+def _on_model_change():
+    st.session_state.model_choice = st.session_state._model_select_widget
+
 selected_model_label = st.selectbox(
     "모델 선택",
     options=list(MODEL_OPTIONS.keys()),
-    index=list(MODEL_OPTIONS.keys()).index(st.session_state.selected_model_label),
-    key="selected_model_label",
+    index=list(MODEL_OPTIONS.keys()).index(st.session_state.model_choice),
+    key="_model_select_widget",
+    on_change=_on_model_change,
     label_visibility="collapsed",
 )
-_provider, _model_id = MODEL_OPTIONS[selected_model_label]
+_provider, _model_id = MODEL_OPTIONS[st.session_state.model_choice]
 selected_model = _build_model(_provider, _model_id)
 
 # pending_input이 있으면 자동 실행
@@ -285,10 +317,15 @@ animation:pulse 1.4s ease-in-out infinite,bounce 1.4s ease-in-out infinite}
             answer = clean_answer
             placeholder.markdown(answer)
 
+        # 이미지가 포함된 답변이면 placeholder를 비우고 이미지 포함 렌더링
+        if _IMAGE_RE.search(answer):
+            placeholder.empty()
+            _render_message_with_images(answer)
+
     # 스트리밍 완료 — 자동 스크롤 중단
     components.html(_SCROLL_STOP_JS, height=0)
 
-    # 관련 주제 버튼 렌더링 (chat_message 밖에서 렌더링하여 버블 침범 방지)
+    # 관련 주제 버튼 렌더링 (chat_message 밖 — 위젯 트리 안정성 확보)
     if related_topics:
         with st.container():
             st.markdown('<div class="related-topics-row">', unsafe_allow_html=True)
@@ -296,10 +333,10 @@ animation:pulse 1.4s ease-in-out infinite,bounce 1.4s ease-in-out infinite}
             cols = st.columns(len(related_topics))
             for col, topic in zip(cols, related_topics):
                 if col.button(f"💡 {topic}", key=f"topic_{msg_idx}_{topic}"):
-                        st.session_state.pending_input = topic
-                        st.session_state.scroll_to_bottom = True
-                        st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
+                    st.session_state.pending_input = topic
+                    st.session_state.scroll_to_bottom = True
+                    st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
 
     st.session_state.messages.append({
         "role": "assistant",

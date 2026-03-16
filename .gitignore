@@ -112,3 +112,6 @@ node_modules/
 
 # Streamlit secrets (API keys)
 .streamlit/secrets.toml
+
+# Chainlit runtime files
+.chainlit/translations/

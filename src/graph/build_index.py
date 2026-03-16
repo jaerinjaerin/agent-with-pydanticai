@@ -31,6 +31,11 @@ from graph.graph_builder import (
     build_networkx_graph,
     save_graph,
 )
+from graph.image_describer import (
+    collect_all_image_paths,
+    describe_images_batch,
+)
+from graph.ingest import ingest_images
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -79,7 +84,7 @@ def load_documents() -> list[dict]:
 
 async def build_graph(documents: list[dict]):
     """엔티티/관계를 추출하고 지식그래프를 구축한다."""
-    print(f"\n[2/3] 엔티티/관계 추출 중... ({len(documents)}개 문서)")
+    print(f"\n[3/4] 엔티티/관계 추출 중... ({len(documents)}개 문서)")
     extractions = []
     all_entities = []
 
@@ -116,7 +121,7 @@ async def build_graph(documents: list[dict]):
 
 def build_embeddings(documents: list[dict]):
     """임베딩을 생성하고 Pinecone에 업로드한다."""
-    print(f"\n[1/3] 임베딩 생성 중... ({len(documents)}개 문서)")
+    print(f"\n[1/4] 임베딩 생성 중... ({len(documents)}개 문서)")
     model = get_embed_model()
     texts = [f"{doc.get('title', '')} {doc.get('content', '')}" for doc in documents]
     vectors = embed_documents(model, texts)
@@ -141,6 +146,41 @@ def build_embeddings(documents: list[dict]):
     upsert_vectors(index, ids, vectors, metadata_list)
     print("  업로드 완료!")
 
+    return model, index
+
+
+def build_image_embeddings(documents: list[dict], embed_model, pinecone_index):
+    """이미지 설명을 생성하고 임베딩 → Pinecone에 업로드한다."""
+    image_paths = collect_all_image_paths(documents)
+    if not image_paths:
+        print("\n[2/4] 이미지 없음 — 건너뜀")
+        return
+
+    print(f"\n[2/4] 이미지 설명 생성 중... ({len(image_paths)}장)")
+    descriptions = describe_images_batch(image_paths)
+
+    # 이미지 설명 임베딩 + Pinecone 업로드
+    total_uploaded = 0
+    for doc in documents:
+        doc_images = []
+        for att in doc.get("attachments", []):
+            doc_images.extend(att.get("images", []))
+        if not doc_images:
+            continue
+
+        count = ingest_images(
+            image_paths=doc_images,
+            title=doc.get("title", ""),
+            url=doc.get("url", ""),
+            source=doc.get("source", ""),
+            embed_model=embed_model,
+            pinecone_index=pinecone_index,
+            descriptions=descriptions,
+        )
+        total_uploaded += count
+
+    print(f"  이미지 벡터 업로드 완료: {total_uploaded}개")
+
 
 async def main():
     print("=" * 60)
@@ -153,14 +193,17 @@ async def main():
         count = sum(1 for d in documents if d.get("source") == source)
         print(f"  - {source}: {count}건")
 
-    # 1. 임베딩 + Pinecone
-    build_embeddings(documents)
+    # 1. 텍스트 임베딩 + Pinecone
+    embed_model, pinecone_index = build_embeddings(documents)
 
-    # 2. 엔티티/관계 추출 + 지식그래프
+    # 2. 이미지 설명 생성 + 임베딩 + Pinecone
+    build_image_embeddings(documents, embed_model, pinecone_index)
+
+    # 3. 엔티티/관계 추출 + 지식그래프
     G = await build_graph(documents)
 
-    # 3. 그래프 저장
-    print(f"\n[3/3] 지식그래프 저장: {GRAPH_PATH}")
+    # 4. 그래프 저장
+    print(f"\n[4/4] 지식그래프 저장: {GRAPH_PATH}")
     save_graph(G, GRAPH_PATH)
 
     print("\n" + "=" * 60)

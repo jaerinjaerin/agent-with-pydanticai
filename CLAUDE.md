@@ -45,6 +45,10 @@ streamlit run src/app.py
 python -c "import sys; sys.path.insert(0,'src'); from agent.faq_agent import ask; print(ask('비밀번호를 잊어버렸어요'))"
 ```
 
+## 워크플로우 규칙
+
+- **UI 관련 기능 구현 후 반드시 `/test-ui` 스킬로 Playwright 테스트를 수행할 것.** 페이지 로드, 채팅 입력/응답, 스크린샷 캡처를 통해 변경 사항이 정상 동작하는지 검증한다. 플랜 작성 시에도 검증 단계에 포함해야 한다.
+
 ## 환경 설정
 
 `.env.example`을 `.env`로 복사하고, `ANTHROPIC_API_KEY`와 `PINECONE_API_KEY`를 설정해야 합니다. 게시판 크롤러를 사용하려면 `LINEWORKS_ID`, `LINEWORKS_PW`도 설정해야 합니다.
