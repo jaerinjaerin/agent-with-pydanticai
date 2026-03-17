@@ -124,8 +124,10 @@ PydanticAI 에이전트 + 벡터 검색(Pinecone) + 지식그래프(NetworkX)를
 │                                                                        │
 │  ┌────────────────────────────────────────────────────────┐            │
 │  │  📄 문서 관리 (pages/admin.py)                         │            │
-│  │  • 문서 업로드 → 청킹 → Pinecone upsert               │            │
-│  │  • 문서 삭제 (벡터 단건 관리)                           │            │
+│  │  • 파일 업로드 → 텍스트/표/이미지 추출                  │            │
+│  │  • 이미지 → AWS S3 업로드 → Claude Vision 설명           │            │
+│  │  • 텍스트+이미지 벡터화 → Pinecone upsert              │            │
+│  │  • 문서 삭제 (벡터 + S3 이미지 정리)                    │            │
 │  └────────────────────────────────────────────────────────┘            │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -144,14 +146,15 @@ PydanticAI 에이전트 + 벡터 검색(Pinecone) + 지식그래프(NetworkX)를
 │   │   ├── build_index.py          # Pinecone + 지식그래프 빌드 스크립트
 │   │   ├── embedding_index.py      # 임베딩 생성 + Pinecone 연동
 │   │   ├── graph_builder.py        # Claude 기반 엔티티 추출 + NetworkX 그래프
-│   │   └── ingest.py               # 단건 문서 인제스트 파이프라인
+│   │   ├── image_describer.py      # Claude Vision 이미지 설명 생성 + 캐시
+│   │   └── ingest.py               # 단건 문서 인제스트 (텍스트+이미지 미디어 파이프라인)
 │   ├── scraper/
-│   │   ├── faq_scraper.py          # LINE WORKS FAQ 크롤러
-│   │   ├── board_scraper.py        # 사내 게시판 크롤러 (Playwright)
 │   │   ├── eluocnc_scraper.py      # 회사 웹사이트 크롤러
-│   │   └── file_extractor.py       # 첨부파일 텍스트 추출 (PDF/DOCX/XLSX/HWP)
+│   │   └── file_extractor.py       # 파일 추출 (텍스트/표/이미지, PDF/DOCX/XLSX/PPTX/MD/TXT/HWP)
+│   ├── storage/
+│   │   └── r2_storage.py           # AWS S3 이미지 업로드/삭제
 │   ├── pages/
-│   │   └── admin.py                # 문서 관리 어드민 페이지
+│   │   └── admin.py                # 문서 관리 어드민 (파일 업로드 → 미디어 파이프라인)
 │   └── ui/
 │       ├── async_runtime.py        # Streamlit 비동기 런타임 호환 레이어
 │       ├── og_cards.py             # OpenGraph 카드 렌더링
@@ -182,6 +185,12 @@ PydanticAI 에이전트 + 벡터 검색(Pinecone) + 지식그래프(NetworkX)를
                    │ Pinecone  │ │ 지식     │ │ 엔티티    │
                    │ 벡터 DB   │ │ 그래프   │ │ 임베딩    │
                    └───────────┘ └──────────┘ └──────────┘
+
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐
+│ 어드민 파일   │ ──▶ │ 텍스트/표/   │ ──▶ │ S3 이미지    │ ──▶ │ Pinecone │
+│ 업로드       │     │ 이미지 추출   │     │ 업로드 +     │     │ 벡터화   │
+│ (PDF/DOCX/..)│     │              │     │ Vision 설명  │     │          │
+└──────────────┘     └──────────────┘     └──────────────┘     └──────────┘
 ```
 
 ### 1단계: 크롤링
@@ -219,7 +228,9 @@ streamlit run src/app.py
 | **지식그래프** | NetworkX |
 | **UI** | Streamlit |
 | **크롤링** | BeautifulSoup, Playwright |
-| **파일 추출** | pdfplumber, python-docx, openpyxl, python-hwp |
+| **파일 추출** | pdfplumber, PyMuPDF, python-docx, openpyxl, python-pptx |
+| **이미지 저장** | AWS S3 (boto3) |
+| **이미지 분석** | Claude Haiku Vision API |
 
 ---
 
@@ -228,10 +239,15 @@ streamlit run src/app.py
 `.env.example`을 `.env`로 복사하고 필요한 키를 설정합니다:
 
 ```bash
-ANTHROPIC_API_KEY=sk-...       # Claude API (에이전트 + 엔티티 추출)
+ANTHROPIC_API_KEY=sk-...       # Claude API (에이전트 + 엔티티 추출 + 이미지 설명)
 PINECONE_API_KEY=...           # Pinecone 벡터 DB
-LINEWORKS_ID=...               # 게시판 크롤러 로그인 (선택)
-LINEWORKS_PW=...               # 게시판 크롤러 로그인 (선택)
+
+# AWS S3 — 문서 이미지 저장 (선택, 미설정 시 텍스트만 인제스트)
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_S3_REGION=ap-northeast-2
+AWS_S3_BUCKET_NAME=eluo-docs
+AWS_S3_PUBLIC_URL=                    # CloudFront URL (선택)
 ```
 
 ---

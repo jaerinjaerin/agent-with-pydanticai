@@ -22,35 +22,63 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from graph.embedding_index import get_embed_model, init_pinecone
-from graph.ingest import ingest_document, delete_document, ingest_with_graph, delete_with_graph
+from graph.ingest import ingest_document, ingest_document_with_media, delete_document
 from graph.data_store import (
     load_items, add_item, update_item, delete_item, find_item_by_url,
 )
 
-st.set_page_config(page_title="문서 관리", page_icon="📄", layout="wide")
-st.title("📄 문서 관리")
-st.caption("문서를 등록/수정/삭제하여 챗봇 지식 베이스를 관리합니다.")
+st.set_page_config(page_title="RAG 문서 관리", page_icon="📄", layout="wide")
+
+# Admin 전용 CSS 로드
+_STATIC = Path(__file__).resolve().parents[1] / "ui" / "static"
+st.markdown(
+    f"<style>\n{_STATIC.joinpath('admin_style.css').read_text()}\n</style>",
+    unsafe_allow_html=True,
+)
+
+# selectbox input 타이핑 방지 + 자동 포커스 해제
+import streamlit.components.v1 as components
+components.html("""<script>
+(function() {
+    const doc = window.parent.document;
+    function fixSelects() {
+        doc.querySelectorAll('[data-baseweb="select"] input').forEach(el => {
+            el.setAttribute('readonly', '');
+            el.style.caretColor = 'transparent';
+        });
+    }
+    fixSelects();
+    doc.activeElement?.blur();
+    setTimeout(fixSelects, 500);
+    setTimeout(fixSelects, 1500);
+    new MutationObserver(fixSelects).observe(doc.body, {childList: true, subtree: true});
+})();
+</script>""", height=0)
+
+st.title("📄 RAG 문서 관리")
+st.caption("AI 챗봇이 참조할 문서를 관리하세요")
 
 # ── 상수 ──
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 ADMIN_DATA_PATH = DATA_DIR / "admin_documents.json"
-BOARD_DATA_PATH = DATA_DIR / "board_lineworks.json"
 ELUOCNC_DATA_PATH = DATA_DIR / "eluocnc.json"
-FAQ_DATA_PATH = DATA_DIR / "faq_lineworks.json"
+BOARD_DATA_PATH = DATA_DIR / "board_documents.json"
 
 ITEMS_PER_PAGE = 15
 
 SOURCE_LABELS = {
-    "admin": "어드민",
-    "board": "사내 게시판",
+    "admin": "사내문서",
     "eluocnc": "회사 홈페이지",
-    "faq": "FAQ",
+    "board": "사내 게시판",
 }
 
 # ── Streamlit Cloud secrets → 환경변수 주입 ──
-for key in ("PINECONE_API_KEY", "ANTHROPIC_API_KEY"):
-    if key in st.secrets and key not in os.environ:
-        os.environ[key] = st.secrets[key]
+try:
+    for key in ("PINECONE_API_KEY", "ANTHROPIC_API_KEY"):
+        if key in st.secrets and key not in os.environ:
+            os.environ[key] = st.secrets[key]
+except FileNotFoundError:
+    pass  # secrets.toml 없으면 .env에서 로드
 
 
 # ── 리소스 로드 ──
@@ -90,9 +118,8 @@ def load_all_documents() -> list[dict]:
     all_items = []
     source_map = {
         ADMIN_DATA_PATH: "admin",
-        BOARD_DATA_PATH: "board",
         ELUOCNC_DATA_PATH: "eluocnc",
-        FAQ_DATA_PATH: "faq",
+        BOARD_DATA_PATH: "board",
     }
     for path, default_source in source_map.items():
         if not path.exists():
@@ -135,6 +162,27 @@ def extract_file_content(uploaded_file) -> str:
         tmp_path.unlink(missing_ok=True)
 
 
+def extract_file_content_with_media(uploaded_file):
+    """업로드된 파일에서 텍스트 + 이미지를 모두 추출한다. ExtractionResult 반환."""
+    from scraper.file_extractor import ExtractionResult, extract_content
+
+    suffix = Path(uploaded_file.name).suffix.lower()
+    if suffix in (".txt",):
+        text = uploaded_file.read().decode("utf-8", errors="ignore")
+        return ExtractionResult(text=text)
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(uploaded_file.read())
+        tmp_path = Path(tmp.name)
+    try:
+        return extract_content(tmp_path)
+    except Exception as e:
+        st.error(f"파일 콘텐츠 추출 실패: {e}")
+        return ExtractionResult(text="")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def run_async(coro):
     """비동기 코루틴을 동기적으로 실행한다."""
     try:
@@ -168,10 +216,13 @@ def show_doc_detail_dialog():
         st.caption(f"URL: {url}")
 
         edit_title = st.text_input("제목", value=doc.get("title", ""), key=f"dlg_title_{k}")
+        _source_options = ["admin", "eluocnc", "board"]
+        _current_source = doc.get("source", "admin")
+        _source_idx = _source_options.index(_current_source) if _current_source in _source_options else 0
         edit_source = st.selectbox(
             "출처",
-            ["admin", "board", "eluocnc", "faq"],
-            index=["admin", "board", "eluocnc", "faq"].index(doc.get("source", "admin")),
+            _source_options,
+            index=_source_idx,
             format_func=SOURCE_LABELS.get,
             key=f"dlg_source_{k}",
         )
@@ -205,19 +256,15 @@ def show_doc_detail_dialog():
 
                 if _pinecone_ok:
                     step2.write("⏳ 기존 벡터 삭제 & 재임베딩 중...")
-                    result = run_async(ingest_with_graph(
+                    result = ingest_document(
                         title=edit_title, content=edit_content,
                         source=edit_source, url=url,
                         embed_model=embed_model, pinecone_index=pinecone_index,
-                        update_graph=True,
-                    ))
+                    )
                     step2.write(f"✅ {result['chunks']}개 청크 재업로드 완료")
-                    if result.get("graph_updated"):
-                        step3.write("✅ 지식그래프 업데이트 완료")
                 else:
                     step2.write("⚠️ Pinecone 미연결 — 벡터 인덱싱 건너뜀")
 
-                st.cache_resource.clear()
                 status.update(label="수정 완료!", state="complete")
 
             st.success(f"'{edit_title}' 수정 완료!")
@@ -245,13 +292,21 @@ def show_doc_detail_dialog():
         st.info("크롤링된 문서는 읽기 전용입니다. 삭제만 가능합니다.")
 
 
-# ── 탭 구성 (2탭: 문서 관리 → 새 문서 등록) ──
-tab_list, tab_upload = st.tabs(["📋 문서 관리", "📤 새 문서 등록"])
+# ── 사이드바 내비게이션 ──
+with st.sidebar:
+    st.markdown("### 📄 문서 관리")
+    _nav_options = ["📋 문서 관리", "📤 새 문서 등록"]
+    _default_nav = st.session_state.get("admin_nav", _nav_options[0])
+    _default_idx = _nav_options.index(_default_nav) if _default_nav in _nav_options else 0
+    nav = st.radio("메뉴", _nav_options, index=_default_idx, label_visibility="collapsed")
+    st.session_state["admin_nav"] = nav
+    st.markdown("---")
+    st.page_link("app.py", label="💬 챗봇으로 돌아가기")
 
 # ══════════════════════════════════════════════════════════════
-# 탭 1: 📋 문서 관리
+# 📋 문서 관리
 # ══════════════════════════════════════════════════════════════
-with tab_list:
+if nav == "📋 문서 관리":
     st.subheader("등록된 문서 목록")
 
     # 필터
@@ -259,7 +314,7 @@ with tab_list:
     with col_filter:
         source_filter = st.selectbox(
             "출처 필터",
-            ["전체", "admin", "board", "eluocnc", "faq"],
+            ["전체", "admin", "eluocnc", "board"],
             format_func=lambda x: "전체" if x == "전체" else SOURCE_LABELS.get(x, x),
         )
     with col_search:
@@ -340,15 +395,24 @@ with tab_list:
                 with col_yes:
                     if st.button("삭제 확인", key=f"yes_del_{global_idx}_{url}", type="primary"):
                         with st.spinner("삭제 중..."):
+                            # S3에서 이미지 삭제
+                            s3_deleted = 0
+                            if doc.get("attachments"):
+                                try:
+                                    from storage.r2_storage import is_configured, delete_images
+                                    import hashlib
+                                    if is_configured():
+                                        url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
+                                        s3_deleted = delete_images(f"doc_images/{url_hash}_")
+                                except Exception as e:
+                                    print(f"[warn] S3 이미지 삭제 실패: {e}")
                             # JSON에서 삭제
                             if data_path:
                                 delete_item(Path(data_path), url)
-                            # Pinecone + 그래프에서 삭제
+                            # Pinecone에서 삭제
                             vec_deleted = 0
                             if _pinecone_ok:
-                                result = run_async(delete_with_graph(url, pinecone_index))
-                                vec_deleted = result['deleted']
-                            st.cache_resource.clear()
+                                vec_deleted = delete_document(url, pinecone_index)
                         del st.session_state[f"confirm_delete_{url}"]
                         st.toast(f"'{title}' 삭제 완료 (벡터 {vec_deleted}개)")
                         st.rerun()
@@ -379,14 +443,14 @@ with tab_list:
 
 
 # ══════════════════════════════════════════════════════════════
-# 탭 2: 📤 새 문서 등록
+# 📤 새 문서 등록
 # ══════════════════════════════════════════════════════════════
-with tab_upload:
+elif nav == "📤 새 문서 등록":
     st.subheader("새 문서 등록")
 
     source = st.selectbox(
         "출처 분류",
-        ["admin", "board", "eluocnc", "faq"],
+        ["admin", "eluocnc", "board"],
         format_func=SOURCE_LABELS.get,
     )
     category = st.text_input("카테고리 (선택사항)", placeholder="예: 업무가이드, 인사규정")
@@ -396,6 +460,7 @@ with tab_upload:
     title = ""
     content = ""
     url = ""
+    _extraction_result = None
 
     if input_method == "파일 업로드":
         uploaded = st.file_uploader(
@@ -405,13 +470,17 @@ with tab_upload:
         title = st.text_input("제목 (빈칸이면 파일명 사용)", key="upload_title")
         url = st.text_input("관련 URL (선택사항)", key="upload_url")
 
+        _extraction_result = None
         if uploaded:
             if not title:
                 title = uploaded.name
-            content = extract_file_content(uploaded)
+            _extraction_result = extract_file_content_with_media(uploaded)
+            content = _extraction_result.text
             if content:
                 with st.expander("추출된 텍스트 미리보기"):
                     st.text(content[:2000] + ("..." if len(content) > 2000 else ""))
+            if _extraction_result.images:
+                st.info(f"이미지 {len(_extraction_result.images)}장 감지됨 (등록 시 S3에 업로드)")
     elif input_method == "직접 입력":
         title = st.text_input("제목", key="manual_title")
         url = st.text_input("관련 URL (선택사항)", key="manual_url")
@@ -454,69 +523,102 @@ with tab_upload:
             url = ""
             content = ""
 
-    extract_entities = st.checkbox("엔티티 추출 (지식그래프 업데이트)", value=True)
-
     # URL 자동 생성
     if not url and title:
         url = generate_admin_url(title)
 
     # 제출 버튼
     if st.button("📥 등록", type="primary", disabled=not (title and content)):
+        # 파일 업로드 모드에서 추출된 이미지 가져오기
+        extracted_images = None
+        if input_method == "파일 업로드" and _extraction_result and _extraction_result.images:
+            extracted_images = _extraction_result.images
+
         with st.status("문서 등록 중...", expanded=True) as status:
-            step1 = st.empty()
-            step2 = st.empty()
-            step3 = st.empty()
-            step4 = st.empty()
+            steps = st.container()
 
             # Step 1: 텍스트 준비
-            step1.write("✅ 텍스트 준비 완료")
+            steps.write("✅ Step 1: 텍스트 준비 완료")
 
-            # Step 2: JSON 저장
-            step2.write("⏳ JSON 저장 중...")
-            doc_data = {
-                "title": title,
-                "content": content,
-                "url": url,
-                "source": source,
-                "category": category,
-            }
-            add_item(ADMIN_DATA_PATH, doc_data)
-            step2.write("✅ JSON 저장 완료")
+            if _pinecone_ok and extracted_images:
+                # 이미지 포함 미디어 파이프라인
+                step_container = steps.empty()
 
-            if _pinecone_ok:
-                if extract_entities:
-                    # 그래프 포함 인제스트
-                    step3.write("⏳ 임베딩 & Pinecone 업로드 중...")
-                    result = run_async(ingest_with_graph(
-                        title=title, content=content, source=source, url=url,
-                        embed_model=embed_model, pinecone_index=pinecone_index,
-                        update_graph=True,
-                    ))
-                    step3.write(f"✅ {result['chunks']}개 청크 업로드 완료")
+                def _on_progress(step: str, detail: str):
+                    label_map = {
+                        "image_upload": "⏳ Step 2: 이미지 S3 업로드 중...",
+                        "image_upload_done": f"✅ Step 2: 이미지 업로드 완료 ({detail})",
+                        "r2_skip": f"⚠️ Step 2: {detail}",
+                        "image_describe": "⏳ Step 3: 이미지 설명 생성 중 (Claude Vision)...",
+                        "image_describe_done": f"✅ Step 3: 이미지 설명 완료 ({detail})",
+                        "image_vectorize": "⏳ Step 4: 이미지 벡터화 중...",
+                        "image_vectorize_done": f"✅ Step 4: {detail}",
+                        "text_ingest": "⏳ Step 5: 텍스트 벡터화 중...",
+                        "text_ingest_done": f"✅ Step 5: {detail}",
+                    }
+                    msg = label_map.get(step, f"⏳ {step}: {detail}")
+                    steps.write(msg)
 
-                    if result.get("graph_updated"):
-                        step4.write("✅ 지식그래프 업데이트 완료")
-                    else:
-                        step4.write("⚠️ 지식그래프 업데이트 건너뜀 (그래프 파일 없음 또는 오류)")
-                else:
-                    # Pinecone만 인제스트
-                    step3.write("⏳ 임베딩 & Pinecone 업로드 중...")
+                result = ingest_document_with_media(
+                    title=title, content=content, source=source, url=url,
+                    embed_model=embed_model, pinecone_index=pinecone_index,
+                    images=extracted_images,
+                    progress_callback=_on_progress,
+                )
+
+                # JSON에 attachments 포함
+                doc_data = {
+                    "title": title,
+                    "content": content,
+                    "url": url,
+                    "source": source,
+                    "category": category,
+                }
+                if result.get("image_urls"):
+                    doc_data["attachments"] = [{
+                        "filename": uploaded.name if uploaded else "file",
+                        "images": result["image_urls"],
+                    }]
+
+                steps.write("⏳ Step 6: JSON 저장 중...")
+                add_item(ADMIN_DATA_PATH, doc_data)
+                steps.write("✅ Step 6: JSON 저장 완료")
+
+                summary = f"텍스트 {result['chunks']}개 청크 + 이미지 {result['images']}개"
+                if result.get("deleted", 0) > 0:
+                    summary += f" (기존 {result['deleted']}개 삭제 후 재등록)"
+            else:
+                # 기존 텍스트 전용 파이프라인
+                steps.write("⏳ Step 2: JSON 저장 중...")
+                doc_data = {
+                    "title": title,
+                    "content": content,
+                    "url": url,
+                    "source": source,
+                    "category": category,
+                }
+                add_item(ADMIN_DATA_PATH, doc_data)
+                steps.write("✅ Step 2: JSON 저장 완료")
+
+                if _pinecone_ok:
+                    steps.write("⏳ Step 3: 임베딩 & Pinecone 업로드 중...")
                     result = ingest_document(
                         title=title, content=content, source=source, url=url,
                         embed_model=embed_model, pinecone_index=pinecone_index,
                     )
-                    step3.write(f"✅ {result['chunks']}개 청크 업로드 완료")
+                    steps.write(f"✅ Step 3: {result['chunks']}개 청크 업로드 완료")
+                    summary = f"{result['chunks']}개 청크"
+                    if result.get("deleted", 0) > 0:
+                        summary += f" (기존 {result['deleted']}개 삭제 후 재등록)"
+                else:
+                    steps.write("⚠️ Pinecone 미연결 — 벡터 인덱싱 건너뜀 (JSON만 저장)")
+                    summary = "JSON만 저장"
 
-                if result.get("deleted", 0) > 0:
-                    status.write(f"ℹ️ 기존 문서 {result['deleted']}개 청크 삭제 후 재등록")
-            else:
-                step3.write("⚠️ Pinecone 미연결 — 벡터 인덱싱 건너뜀 (JSON만 저장)")
-
-            # 캐시 갱신
-            st.cache_resource.clear()
             status.update(label="등록 완료!", state="complete")
 
-        st.success(f"'{title}' 등록 완료!")
+        st.success(f"'{title}' 등록 완료! ({summary})")
+        st.session_state["admin_nav"] = "📋 문서 관리"
+        st.rerun()
 
     if not (title and content):
         st.info("제목과 내용을 입력하면 등록 버튼이 활성화됩니다.")

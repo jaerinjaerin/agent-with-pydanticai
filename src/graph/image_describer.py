@@ -91,6 +91,44 @@ def describe_image(
     return response.content[0].text
 
 
+def describe_image_bytes(
+    image_data: bytes,
+    media_type: str = "image/png",
+    model: str = "claude-haiku-4-5-20251001",
+) -> str:
+    """바이트 데이터로 이미지를 Claude Vision API로 분석하여 텍스트 설명을 생성한다."""
+    if not image_data:
+        return ""
+
+    encoded = base64.standard_b64encode(image_data).decode("utf-8")
+
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model=model,
+        max_tokens=1024,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": encoded,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": SYSTEM_PROMPT,
+                    },
+                ],
+            }
+        ],
+    )
+    return response.content[0].text
+
+
 def describe_images_batch(
     image_paths: list[str],
     model: str = "claude-haiku-4-5-20251001",

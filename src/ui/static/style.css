@@ -1,32 +1,18 @@
 /* ═══════════════════════════════════════════════════
-   Eluo 도우미 — Design System CSS
-   Brand: Navy #00007F · Yellow #FEFE01 · Light #F0F0F0
-   Font: Pretendard
+   Eluo FAQ Chatbot — Custom CSS
+   config.toml로 처리 불가능한 커스텀 스타일만 포함.
+   (색상/폰트/라운딩/테두리 → .streamlit/config.toml [theme])
    ═══════════════════════════════════════════════════ */
 
 /* ── 로딩 애니메이션 ── */
 @keyframes thinking-pulse {
-
-    0%,
-    100% {
-        opacity: 0.3;
-    }
-
-    50% {
-        opacity: 1;
-    }
+    0%, 100% { opacity: 0.3; }
+    50%      { opacity: 1; }
 }
 
 @keyframes thinking-bounce {
-
-    0%,
-    100% {
-        transform: translateY(0);
-    }
-
-    50% {
-        transform: translateY(-4px);
-    }
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-4px); }
 }
 
 .thinking-indicator {
@@ -34,8 +20,8 @@
     align-items: center;
     gap: 6px;
     padding: 8px 0;
-    color: var(--fg-muted, #6B7280);
-    font-size: 14px;
+    color: #808080;
+    font-size: 0.875rem;
 }
 
 .thinking-dots {
@@ -47,75 +33,22 @@
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--brand-navy, #00007F);
-    animation: thinking-pulse 1.4s ease-in-out infinite, thinking-bounce 1.4s ease-in-out infinite;
+    background: #00007F;
+    animation: thinking-pulse 1.4s ease-in-out infinite,
+               thinking-bounce 1.4s ease-in-out infinite;
 }
 
-.thinking-dots span:nth-child(2) {
-    animation-delay: 0.2s;
-}
-
-.thinking-dots span:nth-child(3) {
-    animation-delay: 0.4s;
-}
-
-/* ── Pretendard 웹폰트 ── */
-@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
-
-/* ── Design Tokens ── */
-:root {
-    --brand-yellow: #FEFE01;
-    --brand-navy: #00007F;
-    --brand-light: #F0F0F0;
-
-    --bg: #FAFAF9;
-    --bg-chat: #FFFFFF;
-    --fg: #1A1A2E;
-    --fg-muted: #6B7280;
-    --fg-subtle: #9CA3AF;
-
-    --border: #E5E7EB;
-    --border-light: #F3F4F6;
-
-    --radius: 12px;
-    --radius-sm: 8px;
-    --radius-lg: 16px;
-
-    --shadow-sm: 0 1px 2px rgba(0, 0, 127, 0.04);
-    --shadow-md: 0 4px 12px rgba(0, 0, 127, 0.06);
-    --shadow-lg: 0 8px 24px rgba(0, 0, 127, 0.08);
-
-    --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* ── Global Reset ── */
-html,
-body,
-[class*="css"] {
-    font-family: 'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif !important;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-}
-
-/* ── Page Background ── */
-.stApp {
-    background:
-        radial-gradient(ellipse 80% 60% at 10% 0%, rgba(0, 0, 127, 0.03) 0%, transparent 50%),
-        radial-gradient(ellipse 60% 50% at 90% 100%, rgba(254, 254, 1, 0.04) 0%, transparent 50%),
-        var(--bg) !important;
-}
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
 
 /* ── 사이드바 숨김 ── */
-section[data-testid="stSidebar"] {
-    display: none;
-}
-
+section[data-testid="stSidebar"],
 [data-testid="collapsedControl"] {
     display: none;
 }
 
-/* ── Header 영역 ── */
-.stApp>header {
+/* ── Header 투명 ── */
+.stApp > header {
     background: transparent !important;
 }
 
@@ -135,7 +68,7 @@ section[data-testid="stSidebar"] {
     letter-spacing: 0.03em;
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    transition: all var(--transition);
+    transition: all 0.2s ease;
 }
 
 .pinecone-badge.connected {
@@ -147,7 +80,7 @@ section[data-testid="stSidebar"] {
 .pinecone-badge.disconnected {
     background: rgba(254, 226, 226, 0.85);
     border: 1px solid rgba(252, 165, 165, 0.5);
-    color: #dc2626;
+    color: #D1242F;
 }
 
 .pinecone-dot {
@@ -168,15 +101,8 @@ section[data-testid="stSidebar"] {
 }
 
 @keyframes pulse-dot {
-
-    0%,
-    100% {
-        opacity: 1;
-    }
-
-    50% {
-        opacity: 0.5;
-    }
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.5; }
 }
 
 /* ── 웰컴 카드 ── */
@@ -190,32 +116,26 @@ section[data-testid="stSidebar"] {
 .welcome-greeting {
     font-size: 1.6rem;
     font-weight: 700;
-    color: var(--brand-navy);
+    color: #00007F;
     letter-spacing: -0.03em;
     line-height: 1;
 }
 
-/* ── 채팅 메시지 ── */
-.stChatMessage {
-    border-radius: var(--radius) !important;
-    border: 1px solid transparent !important;
-    transition: all var(--transition);
-}
-
-/* 유저 메시지 */
+/* ── 채팅 메시지 커스텀 ── */
+/* 유저 메시지 배경 */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
     background: rgba(0, 0, 127, 0.04) !important;
     border-color: rgba(0, 0, 127, 0.06) !important;
 }
 
-/* 어시스턴트 메시지 */
+/* 어시스턴트 메시지 배경 */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
-    background: var(--bg-chat) !important;
-    border-color: var(--border-light) !important;
-    box-shadow: var(--shadow-sm);
+    background: #FFFFFF !important;
+    border: 1px solid #E5E5E5 !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-/* 아바타 — SVG 커스텀 아이콘 사용, 둥근 사각형 */
+/* 아바타 둥근 사각형 */
 [data-testid="stChatMessage"] img[data-testid="chatAvatarIcon-image"] {
     border-radius: 8px !important;
 }
@@ -231,36 +151,34 @@ div[data-testid="stSelectbox"]:has(div[data-baseweb="select"]) {
     min-width: 200px;
 }
 
-div[data-testid="stSelectbox"] div[data-baseweb="select"]>div {
-    background: var(--bg-chat) !important;
-    border: 1px solid var(--border) !important;
+div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+    background: #FFFFFF !important;
+    border: 1px solid #E5E5E5 !important;
     border-radius: 20px !important;
     padding: 0 16px !important;
     font-size: 0.75rem !important;
     font-weight: 500 !important;
-    color: var(--fg-muted) !important;
+    color: #808080 !important;
     min-height: unset !important;
     height: 32px !important;
     width: fit-content !important;
     display: flex !important;
     align-items: center !important;
     cursor: pointer;
-    transition: all var(--transition);
-    box-shadow: var(--shadow-sm);
+    transition: all 0.2s ease;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-/* 내부 컨테이너도 flex 정렬 */
-div[data-testid="stSelectbox"] div[data-baseweb="select"]>div>div {
+div[data-testid="stSelectbox"] div[data-baseweb="select"] > div > div {
     display: flex !important;
     align-items: center !important;
 }
 
-div[data-testid="stSelectbox"] div[data-baseweb="select"]>div:hover {
+div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:hover {
     border-color: rgba(0, 0, 127, 0.2) !important;
-    box-shadow: var(--shadow-md);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
 }
 
-/* 텍스트 잘림 방지 — value div + 내부 모든 요소 */
 div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value],
 div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
 div[data-testid="stSelectbox"] div[data-baseweb="select"] span {
@@ -273,80 +191,49 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] span {
 div[data-testid="stSelectbox"] svg {
     width: 12px !important;
     height: 12px !important;
-    color: var(--fg-subtle) !important;
+    color: #808080 !important;
     flex-shrink: 0;
     margin-left: 6px !important;
 }
 
-/* value 텍스트 라인 높이 통일 */
 div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value] {
     line-height: 1 !important;
     display: flex !important;
     align-items: center !important;
 }
 
-/* 커서를 pointer로 통일 (내부 input의 text 커서 제거) */
 div[data-testid="stSelectbox"] div[data-baseweb="select"],
 div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     cursor: pointer !important;
 }
 
-/* ── 채팅 입력창 ── */
-[data-testid="stChatInput"] {
-    border-radius: var(--radius) !important;
-}
-
-[data-testid="stChatInput"] textarea {
-    border-radius: var(--radius) !important;
-    border: 1.5px solid var(--border) !important;
-    background: var(--bg-chat) !important;
-    font-size: 0.92rem !important;
-    padding: 14px 16px !important;
-    transition: border-color var(--transition), box-shadow var(--transition) !important;
-    box-shadow: var(--shadow-sm) !important;
-}
-
+/* ── 채팅 입력창 포커스 커스텀 ── */
 [data-testid="stChatInput"] textarea:focus,
-[data-testid="stChatInput"] textarea:focus-visible,
-[data-testid="stChatInput"] textarea:focus-within {
-    border-color: var(--border) !important;
-    box-shadow: none !important;
+[data-testid="stChatInput"] textarea:focus-visible {
+    border-color: #00007F !important;
+    box-shadow: 0 0 0 3px rgba(0, 0, 127, 0.15) !important;
     outline: none !important;
-    outline-width: 0 !important;
-    outline-color: transparent !important;
-    caret-color: var(--fg) !important;
+    caret-color: #1C1C1C !important;
 }
 
-/* Streamlit 기본 포커스 링 완전 제거 */
-[data-testid="stChatInput"] *:focus,
-[data-testid="stChatInput"] *:focus-visible {
-    outline: none !important;
-    box-shadow: none !important;
-}
-
-/* Streamlit emotion 포커스 border 제거 */
-[data-testid="stChatInput"]>div {
+/* Streamlit 기본 포커스 링 제거 */
+[data-testid="stChatInput"] > div {
     border-color: transparent !important;
     box-shadow: none !important;
     outline: none !important;
 }
 
-[data-testid="stChatInput"]>div:focus-within {
+[data-testid="stChatInput"] > div:focus-within {
     border-color: transparent !important;
     box-shadow: none !important;
-}
-
-[data-testid="stChatInput"] textarea::placeholder {
-    color: var(--fg-subtle) !important;
-    font-weight: 400;
 }
 
 /* 전송 버튼 */
 [data-testid="stChatInput"] button {
-    background: var(--brand-navy) !important;
-    color: var(--brand-yellow) !important;
+    background: #00007F !important;
+    color: #FEFE01 !important;
     border-radius: 8px !important;
-    transition: all var(--transition) !important;
+    transition: all 0.2s ease !important;
 }
 
 [data-testid="stChatInput"] button:hover {
@@ -357,20 +244,20 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 /* ── OpenGraph 링크 카드 ── */
 .og-card {
     display: flex;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border: 1px solid #E5E5E5;
+    border-radius: 8px;
     overflow: hidden;
     margin: 10px 0;
-    background: var(--bg-chat);
+    background: #FFFFFF;
     text-decoration: none;
     color: inherit;
-    transition: all var(--transition);
+    transition: all 0.2s ease;
     max-height: 120px;
 }
 
 .og-card:hover {
     border-color: rgba(0, 0, 127, 0.15);
-    box-shadow: var(--shadow-md);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
     transform: translateY(-1px);
 }
 
@@ -378,7 +265,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     width: 120px;
     min-width: 120px;
     object-fit: cover;
-    background: var(--brand-light);
+    background: #F0F0F0;
 }
 
 .og-card-body {
@@ -391,9 +278,9 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 }
 
 .og-card-title {
-    font-size: 0.88rem;
+    font-size: 0.875rem;
     font-weight: 600;
-    color: var(--fg);
+    color: #1C1C1C;
     margin: 0 0 4px 0;
     display: -webkit-box;
     -webkit-line-clamp: 1;
@@ -402,8 +289,8 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 }
 
 .og-card-desc {
-    font-size: 0.78rem;
-    color: var(--fg-muted);
+    font-size: 0.75rem;
+    color: #808080;
     margin: 0 0 6px 0;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -413,8 +300,8 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 }
 
 .og-card-url {
-    font-size: 0.68rem;
-    color: var(--fg-subtle);
+    font-size: 0.75rem;
+    color: #808080;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -422,13 +309,13 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 
 /* ── Callout 박스 ── */
 .callout {
-    background: linear-gradient(135deg, rgba(0, 0, 127, 0.02), rgba(254, 254, 1, 0.03));
-    border-radius: var(--radius-sm);
+    background: #F5F5F5;
+    border-radius: 8px;
     padding: 14px 18px;
     margin: 10px 0;
-    border-left: 3px solid var(--brand-navy);
-    font-size: 0.88rem;
-    color: var(--fg);
+    border-left: 3px solid #00007F;
+    font-size: 0.875rem;
+    color: #1C1C1C;
 }
 
 .callout-icon {
@@ -439,11 +326,11 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 /* ── 구분선 ── */
 .notion-divider {
     border: none;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid #E5E5E5;
     margin: 16px 0;
 }
 
-/* ── 스크롤 관련 ── */
+/* ── 스크롤 잠금 ── */
 [data-testid="ScrollToBottomContainer"] {
     display: none !important;
 }
@@ -471,57 +358,18 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     overflow-anchor: none !important;
 }
 
-/* ── Streamlit 기본 요소 미세 조정 ── */
-.stMarkdown {
-    line-height: 1.65;
-}
-
-/* 마크다운 코드 블록 */
-.stMarkdown pre {
-    border-radius: var(--radius-sm) !important;
-    border: 1px solid var(--border) !important;
-}
-
-/* 마크다운 인라인 코드 */
-.stMarkdown code:not(pre code) {
-    background: rgba(0, 0, 127, 0.05) !important;
-    color: var(--brand-navy) !important;
-    padding: 2px 6px !important;
-    border-radius: 4px !important;
-    font-size: 0.85em !important;
-}
-
-/* 링크 스타일 */
-.stMarkdown a {
-    color: var(--brand-navy) !important;
-    text-decoration-color: rgba(0, 0, 127, 0.2) !important;
-    text-underline-offset: 3px;
-    transition: text-decoration-color var(--transition);
-}
-
-.stMarkdown a:hover {
-    text-decoration-color: var(--brand-navy) !important;
-}
-
-/* 에러 메시지 */
-.stAlert {
-    border-radius: var(--radius) !important;
-}
-
 /* ── 관련 주제 버튼 ── */
-/* 컨테이너: .related-topics-row 마커를 포함하는 stVerticalBlock 기준 */
-/* chat_message 밖에 렌더링되므로 assistant 버블에 시각적으로 붙이기 */
 [data-testid="stVerticalBlock"]:has(.related-topics-row) {
     width: 100% !important;
     padding: 4px 16px 10px !important;
     margin-top: -12px !important;
     gap: 0 !important;
     box-sizing: border-box !important;
-    background: var(--bg-chat) !important;
-    border: 1px solid var(--border-light) !important;
+    background: #FFFFFF !important;
+    border: 1px solid #E5E5E5 !important;
     border-top: none !important;
-    border-radius: 0 0 var(--radius) var(--radius) !important;
-    box-shadow: var(--shadow-sm) !important;
+    border-radius: 0 0 10px 10px !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
 }
 
 [data-testid="stVerticalBlock"]:has(.related-topics-row) .related-topics-row {
@@ -547,8 +395,8 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     align-items: stretch !important;
 }
 
-[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"]>div,
-[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"]>div>div {
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"] > div,
+[data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stColumn"] > div > div {
     height: 100% !important;
     display: flex !important;
     align-items: stretch !important;
@@ -562,19 +410,32 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     height: 100% !important;
     margin: 0 !important;
     padding: 6px 14px !important;
-    border-radius: var(--radius-sm) !important;
-    font-size: 0.82rem !important;
-    background: rgba(0, 0, 127, 0.06) !important;
-    border: 1px solid rgba(0, 0, 127, 0.15) !important;
-    color: var(--brand-navy) !important;
-    transition: all var(--transition) !important;
+    border-radius: 8px !important;
+    font-size: 0.75rem !important;
+    background: #FFFFFF !important;
+    border: 1px solid #E5E5E5 !important;
+    color: #1a1a2e !important;
+    transition: all 0.2s ease !important;
     white-space: nowrap !important;
     text-align: center !important;
 }
 
 [data-testid="stVerticalBlock"]:has(.related-topics-row) button:hover {
-    background: rgba(0, 0, 127, 0.12) !important;
-    border-color: var(--brand-navy) !important;
+    border-color: #00007F !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* ── Scrollbar 숨기기 ── */
+.no-scrollbar::-webkit-scrollbar,
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+
+.no-scrollbar,
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
 }
 
 /* ── 반응형 ── */
@@ -594,7 +455,6 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
         padding: 4px 10px;
     }
 
-    /* 관련 주제 버튼 줄바꿈 */
     [data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stHorizontalBlock"] {
         flex-wrap: wrap !important;
     }

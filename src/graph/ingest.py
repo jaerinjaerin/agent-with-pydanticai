@@ -135,69 +135,124 @@ def ingest_document(
     return {"chunks": len(chunks), "deleted": deleted}
 
 
-def delete_document(url: str, pinecone_index, namespace: str = "") -> int:
-    """문서를 Pinecone에서 삭제한다. 삭제된 벡터 수를 반환."""
-    return delete_doc_vectors(pinecone_index, url, namespace=namespace)
-
-
-async def ingest_with_graph(
+def ingest_document_with_media(
     title: str,
     content: str,
     source: str,
     url: str,
     embed_model,
     pinecone_index,
-    update_graph: bool = True,
+    images: list | None = None,
     namespace: str = "",
+    progress_callback=None,
 ) -> dict:
-    """문서 인제스트 + 지식그래프 업데이트를 수행한다.
+    """텍스트 + 이미지를 포함한 전체 인제스트 파이프라인.
+
+    Args:
+        images: ExtractionResult.images 리스트 (ExtractedImage 객체들).
+        progress_callback: (step: str, detail: str) → None. UI 상태 표시용.
 
     Returns:
-        {"chunks": int, "deleted": int, "graph_updated": bool}
+        {"chunks": N, "images": M, "deleted": D, "image_urls": [...]}
     """
-    # Pinecone 인제스트
+    def _progress(step: str, detail: str = ""):
+        if progress_callback:
+            progress_callback(step, detail)
+
+    image_urls: list[str] = []
+    image_count = 0
+
+    # 1. 이미지 처리 (S3 업로드 + 설명 생성 + 벡터화)
+    if images:
+        from storage.r2_storage import is_configured as s3_configured, upload_image
+        from graph.image_describer import describe_image_bytes
+
+        if not s3_configured():
+            _progress("s3_skip", "S3 환경변수 미설정 — 이미지 건너뜀")
+        else:
+            import hashlib
+            import re
+            import time
+
+            url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
+            # 안전한 prefix 생성
+            safe_title = re.sub(r"[^\w가-힣-]", "_", title)[:30]
+            r2_prefix = f"doc_images/{url_hash}_{safe_title}"
+
+            # 1a. S3에 이미지 업로드
+            _progress("image_upload", f"{len(images)}장 업로드 중...")
+            for img in images:
+                try:
+                    key = f"{r2_prefix}/{img.filename}"
+                    img_url = upload_image(img.data, key)
+                    image_urls.append(img_url)
+                except Exception as e:
+                    print(f"  [warn] 이미지 업로드 실패 ({img.filename}): {e}")
+
+            if image_urls:
+                _progress("image_upload_done", f"{len(image_urls)}장 업로드 완료")
+
+            # 1b. 이미지 설명 생성 (Claude Vision)
+            if image_urls:
+                _progress("image_describe", f"{len(image_urls)}장 설명 생성 중...")
+                descriptions: dict[str, str] = {}
+                for i, (img, img_url) in enumerate(zip(images, image_urls)):
+                    try:
+                        ext = img.filename.rsplit(".", 1)[-1].lower()
+                        media_type = {
+                            "png": "image/png",
+                            "jpg": "image/jpeg",
+                            "jpeg": "image/jpeg",
+                            "gif": "image/gif",
+                            "webp": "image/webp",
+                        }.get(ext, "image/png")
+                        desc = describe_image_bytes(img.data, media_type=media_type)
+                        descriptions[img_url] = desc
+                        if (i + 1) % 3 == 0:
+                            time.sleep(0.5)  # API 속도 제한
+                    except Exception as e:
+                        print(f"  [warn] 이미지 설명 생성 실패 ({img.filename}): {e}")
+                        descriptions[img_url] = ""
+
+                _progress("image_describe_done", f"{len(descriptions)}장 설명 완료")
+
+                # 1c. 이미지 설명 벡터화
+                _progress("image_vectorize", "이미지 벡터화 중...")
+                image_count = ingest_images(
+                    image_paths=image_urls,
+                    title=title,
+                    url=url,
+                    source=source,
+                    embed_model=embed_model,
+                    pinecone_index=pinecone_index,
+                    descriptions=descriptions,
+                    namespace=namespace,
+                )
+                _progress("image_vectorize_done", f"{image_count}개 이미지 벡터 업로드")
+
+    # 2. 텍스트 인제스트 (기존 로직)
+    _progress("text_ingest", "텍스트 벡터화 중...")
     result = ingest_document(
-        title=title, content=content, source=source, url=url,
-        embed_model=embed_model, pinecone_index=pinecone_index,
+        title=title,
+        content=content,
+        source=source,
+        url=url,
+        embed_model=embed_model,
+        pinecone_index=pinecone_index,
         namespace=namespace,
     )
+    _progress("text_ingest_done", f"{result['chunks']}개 텍스트 청크 업로드")
 
-    graph_updated = False
-    if update_graph and GRAPH_PATH.exists():
-        try:
-            from graph.graph_builder import load_graph, save_graph, add_doc_to_graph
-
-            graph = load_graph(GRAPH_PATH)
-            doc = {"title": title, "content": content, "url": url, "source": source}
-            graph = await add_doc_to_graph(graph, doc, embed_model)
-            save_graph(graph, GRAPH_PATH)
-            graph_updated = True
-        except Exception as e:
-            print(f"[warn] 그래프 업데이트 실패: {e}")
-
-    return {**result, "graph_updated": graph_updated}
+    return {
+        "chunks": result["chunks"],
+        "images": image_count,
+        "deleted": result["deleted"],
+        "image_urls": image_urls,
+    }
 
 
-async def delete_with_graph(
-    url: str, pinecone_index, namespace: str = ""
-) -> dict:
-    """문서를 Pinecone + 지식그래프에서 삭제한다.
+def delete_document(url: str, pinecone_index, namespace: str = "") -> int:
+    """문서를 Pinecone에서 삭제한다. 삭제된 벡터 수를 반환."""
+    return delete_doc_vectors(pinecone_index, url, namespace=namespace)
 
-    Returns:
-        {"deleted": int, "graph_updated": bool}
-    """
-    deleted = delete_document(url, pinecone_index, namespace=namespace)
 
-    graph_updated = False
-    if GRAPH_PATH.exists():
-        try:
-            from graph.graph_builder import load_graph, save_graph, remove_doc_from_graph
-
-            graph = load_graph(GRAPH_PATH)
-            graph = remove_doc_from_graph(graph, url)
-            save_graph(graph, GRAPH_PATH)
-            graph_updated = True
-        except Exception as e:
-            print(f"[warn] 그래프 삭제 실패: {e}")
-
-    return {"deleted": deleted, "graph_updated": graph_updated}

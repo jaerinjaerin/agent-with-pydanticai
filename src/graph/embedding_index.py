@@ -202,13 +202,24 @@ def search_pinecone(
     index: Any,
     query_vector: list[float],
     top_k: int = 5,
+    filter: dict | None = None,
 ) -> list[dict]:
     """Pinecone에서 유사 벡터를 검색한다.
+
+    Args:
+        filter: Pinecone 메타데이터 필터 (예: {"source": {"$eq": "admin"}}).
 
     Returns:
         [{"id": str, "score": float, "metadata": dict}, ...]
     """
-    results = index.query(vector=query_vector, top_k=top_k, include_metadata=True)
+    kwargs: dict[str, Any] = {
+        "vector": query_vector,
+        "top_k": top_k,
+        "include_metadata": True,
+    }
+    if filter:
+        kwargs["filter"] = filter
+    results = index.query(**kwargs)
     return [
         {
             "id": match["id"],
@@ -217,3 +228,41 @@ def search_pinecone(
         }
         for match in results["matches"]
     ]
+
+
+def rerank_results(
+    pc: Any,
+    query: str,
+    documents: list[dict],
+    top_n: int = 5,
+    model: str = "bge-reranker-v2-m3",
+) -> list[dict]:
+    """Pinecone Inference API로 결과를 리랭킹한다.
+
+    Args:
+        pc: Pinecone 클라이언트 인스턴스.
+        query: 원본 검색 쿼리.
+        documents: vector_search에서 반환된 결과 리스트.
+        top_n: 리랭킹 후 반환할 최대 결과 수.
+        model: 리랭킹 모델명.
+
+    Returns:
+        리랭킹된 결과 리스트 (rerank_score 포함).
+    """
+    if not documents:
+        return []
+
+    doc_texts = [d.get("content", "") for d in documents]
+    response = pc.inference.rerank(
+        model=model,
+        query=query,
+        documents=doc_texts,
+        top_n=top_n,
+        return_documents=False,
+    )
+    reranked = []
+    for item in response.data:
+        doc = documents[item.index].copy()
+        doc["rerank_score"] = item.score
+        reranked.append(doc)
+    return reranked

@@ -1,0 +1,108 @@
+/* selectbox 내부 input: 텍스트 커서 숨김 + 타이핑 방지 */
+[data-baseweb="select"] input[aria-autocomplete="list"] {
+    caret-color: transparent !important;
+    color: transparent !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+}
+/* 선택된 값 텍스트는 정상 표시 */
+[data-baseweb="select"] [data-baseweb="tag"],
+[data-baseweb="select"] > div > div > div:first-child {
+    color: inherit !important;
+}
+
+/* Admin 사이드바 전용 스타일 */
+
+/* Streamlit 기본 multipage 내비게이션 숨김 */
+[data-testid="stSidebarNav"] {
+    display: none !important;
+}
+
+/* 사이드바 배경 & 텍스트 */
+[data-testid="stSidebar"] {
+    background-color: #00007F !important;
+}
+
+[data-testid="stSidebar"] * {
+    color: white !important;
+}
+
+/* 사이드바 닫기 버튼 */
+[data-testid="stSidebar"] button[kind="header"] {
+    color: white !important;
+}
+
+/* 사이드바 내부 콘텐츠: 전체 너비 + 최소 패딩 */
+[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: 100% !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+
+/* stRadio 및 모든 상위 컨테이너: 전체 너비 */
+[data-testid="stSidebar"] [data-testid="stRadio"],
+[data-testid="stSidebar"] [data-testid="stElementContainer"],
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"],
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] {
+    width: 100% !important;
+}
+
+/* st.radio 컨테이너: 원형 인디케이터 숨김 + 메뉴 리스트 형태 */
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label {
+    display: flex !important;
+    align-items: center;
+    padding: 0.6rem 1rem !important;
+    margin: 0.2rem 0 !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+/* 텍스트 여백 제거 */
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label p {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* 라디오 원형 인디케이터 숨김 */
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+    display: none !important;
+}
+
+/* 비활성 항목 hover */
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:hover {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* 활성(선택된) 항목: yellow 배경 + navy 텍스트 */
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) {
+    background-color: #FEFE01 !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) * {
+    color: #00007F !important;
+}
+
+/* 구분선 색상 */
+[data-testid="stSidebar"] hr {
+    border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* 챗봇 링크 스타일 */
+[data-testid="stSidebar"] [data-testid="stPageLink"] a {
+    color: white !important;
+    opacity: 0.85;
+}
+
+[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover {
+    opacity: 1;
+}

@@ -42,7 +42,7 @@ def _parse_related_topics(text: str) -> tuple[str, list[str]]:
 
 
 def _render_message_with_images(text: str) -> None:
-    """[IMAGE: 경로] 패턴을 파싱하여 텍스트와 이미지를 인라인으로 렌더링한다."""
+    """[IMAGE: 경로 또는 URL] 패턴을 파싱하여 텍스트와 이미지를 인라인으로 렌더링한다."""
     parts = _IMAGE_RE.split(text)
     # split 결과: [텍스트, 이미지경로, 텍스트, 이미지경로, ...]
     for i, part in enumerate(parts):
@@ -52,14 +52,20 @@ def _render_message_with_images(text: str) -> None:
             if stripped:
                 st.markdown(stripped)
         else:
-            # 이미지 경로 부분
-            img_path = PROJECT_ROOT / part.strip()
-            if img_path.exists():
-                col, _, _ = st.columns([1, 2, 0.01])
-                with col:
-                    st.image(str(img_path), use_container_width=True)
-            else:
-                st.caption(f"(이미지를 찾을 수 없습니다: {part.strip()})")
+            # 이미지 경로/URL 부분
+            img_ref = part.strip()
+            col, _, _ = st.columns([1, 2, 0.01])
+            with col:
+                if img_ref.startswith(("http://", "https://")):
+                    # S3 URL 등 외부 이미지
+                    st.image(img_ref, use_container_width=True)
+                else:
+                    # 로컬 파일 경로 (하위호환)
+                    img_path = PROJECT_ROOT / img_ref
+                    if img_path.exists():
+                        st.image(str(img_path), use_container_width=True)
+                    else:
+                        st.caption(f"(이미지를 찾을 수 없습니다: {img_ref})")
 
 
 # 자체 완결형 스크롤 트리거 (iframe 내에서 parent document 직접 조작, 1회성)
@@ -120,7 +126,6 @@ try:
 except FileNotFoundError:
     st.error(
         "데이터가 없습니다. 먼저 크롤러를 실행해주세요:\n\n"
-        "`python src/scraper/board_scraper.py`\n\n"
         "`python src/scraper/eluocnc_scraper.py`"
     )
     st.stop()
@@ -249,7 +254,6 @@ animation:pulse 1.4s ease-in-out infinite,bounce 1.4s ease-in-out infinite}
                     tool_name = event.part.tool_name
                     _tool_labels = {
                         "search_faq": "🔍 검색 중...",
-                        "explore_topic": "🔍 주제 탐색 중...",
                         "list_titles": "📋 목록 조회 중...",
                         "get_item_detail": "📄 상세 조회 중...",
                         "get_data_stats": "📊 통계 조회 중...",

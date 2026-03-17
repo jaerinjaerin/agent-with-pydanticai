@@ -1,7 +1,7 @@
 """
 LINE WORKS FAQ 에이전트.
 
-Hybrid RAG (VectorRAG + GraphRAG) 검색 툴을 갖춘 PydanticAI 에이전트로,
+VectorRAG 검색 툴을 갖춘 PydanticAI 에이전트로,
 크롤링된 FAQ 데이터를 기반으로 사용자 질문에 답변한다.
 """
 
@@ -25,25 +25,27 @@ except Exception:
 from agent.graph_database import GraphRAGDatabase
 
 
-def search_faq(ctx: RunContext[GraphRAGDatabase], query: str) -> str:
-    """사용자 질문을 기반으로 하이브리드 검색(벡터 + 그래프)을 수행합니다."""
-    results = ctx.deps.hybrid_search(query)
+def search_faq(ctx: RunContext[GraphRAGDatabase], query: str, source: str = "") -> str:
+    """사용자 질문을 기반으로 벡터 검색을 수행합니다.
+
+    Args:
+        query: 검색 쿼리.
+        source: 소스 필터. "eluocnc"(회사 홈페이지), "admin"(어드민), "FAQ"(사내게시판), ""(전체 검색).
+    """
+    results = ctx.deps.search(query, source=source)
     if not results:
         return "관련 FAQ를 찾을 수 없습니다."
 
-    source_labels = {"faq": "FAQ", "board": "게시판", "eluocnc": "회사 홈페이지"}
+    source_labels = {"eluocnc": "회사 홈페이지", "admin": "사내문서", "FAQ": "사내게시판"}
     output_parts = []
     for i, r in enumerate(results, 1):
-        source = source_labels.get(r.get("source", "faq"), r.get("source", ""))
+        src_label = source_labels.get(r.get("source", "eluocnc"), r.get("source", ""))
         part = (
-            f"[{i}] [{source}] {r['title']}\n"
+            f"[{i}] [{src_label}] {r['title']}\n"
             f"내용: {r['content']}\n"
             f"URL: {r['url']}\n"
-            f"유사도: {r['score']:.3f}"
+            f"유사도: {r.get('rerank_score', r['score']):.3f}"
         )
-        concepts = r.get("related_entities", [])
-        if concepts:
-            part += f"\n관련 개념: {', '.join(concepts[:3])}"
         images = r.get("images", [])
         if images:
             part += f"\n첨부 이미지: {', '.join(images[:5])}"
@@ -51,42 +53,11 @@ def search_faq(ctx: RunContext[GraphRAGDatabase], query: str) -> str:
     return "\n\n".join(output_parts)
 
 
-def explore_topic(ctx: RunContext[GraphRAGDatabase], topic: str) -> str:
-    """그래프에서 특정 토픽의 연결된 엔티티와 문서를 탐색합니다.
-
-    Args:
-        topic: 탐색할 토픽/주제 (예: "메일", "드라이브", "경조금").
-    """
-    results = ctx.deps.explore_topic(topic)
-    if not results:
-        return f"'{topic}' 관련 엔티티를 찾을 수 없습니다."
-
-    output_parts = []
-    for r in results:
-        neighbors_str = ""
-        entity_neighbors = [n for n in r["neighbors"] if n["type"] == "ENTITY"]
-        doc_neighbors = [n for n in r["neighbors"] if n["type"] == "DOCUMENT"]
-
-        if entity_neighbors:
-            related = [f"  - {n['name']} ({n['relation']})" for n in entity_neighbors[:5]]
-            neighbors_str += "\n관련 개념:\n" + "\n".join(related)
-        if doc_neighbors:
-            neighbors_str += f"\n관련 문서: {len(doc_neighbors)}건"
-
-        output_parts.append(
-            f"[{r['type']}] {r['entity']}\n"
-            f"설명: {r['description']}\n"
-            f"유사도: {r['similarity']:.3f}"
-            f"{neighbors_str}"
-        )
-    return "\n\n".join(output_parts)
-
-
 def list_titles(ctx: RunContext[GraphRAGDatabase], source: str = "", keyword: str = "") -> str:
     """등록된 항목들의 제목 목록을 반환합니다.
 
     Args:
-        source: 필터할 출처. "faq", "board", "eluocnc", 또는 ""(전체).
+        source: 필터할 출처. "eluocnc", "admin", 또는 ""(전체).
         keyword: 제목에 포함된 키워드로 필터 (선택사항).
     """
     items = ctx.deps.items
@@ -98,10 +69,10 @@ def list_titles(ctx: RunContext[GraphRAGDatabase], source: str = "", keyword: st
                  or keyword_lower in item.get("content", "")[:200].lower()]
 
     if not items:
-        source_label = {"faq": "FAQ", "board": "게시판", "eluocnc": "회사 홈페이지"}.get(source, source)
+        source_label = {"eluocnc": "회사 홈페이지", "admin": "사내문서", "FAQ": "사내게시판"}.get(source, source)
         return f"{source_label} 데이터가 없습니다." if source else "등록된 데이터가 없습니다."
 
-    source_labels = {"faq": "FAQ", "board": "게시판", "eluocnc": "회사 홈페이지"}
+    source_labels = {"eluocnc": "회사 홈페이지", "admin": "사내문서", "FAQ": "사내게시판"}
     lines = []
     for i, item in enumerate(items, 1):
         src = source_labels.get(item.get("source", ""), "")
@@ -123,7 +94,7 @@ def get_item_detail(ctx: RunContext[GraphRAGDatabase], title: str) -> str:
     title_lower = title.lower()
     for item in ctx.deps.items:
         if title_lower in item.get("title", "").lower():
-            source_labels = {"faq": "FAQ", "board": "게시판", "eluocnc": "회사 홈페이지"}
+            source_labels = {"eluocnc": "회사 홈페이지", "admin": "사내문서", "FAQ": "사내게시판"}
             source = source_labels.get(item.get("source", ""), item.get("source", ""))
             parts = [
                 f"[{source}] {item.get('title', '')}",
@@ -142,22 +113,15 @@ def get_data_stats(ctx: RunContext[GraphRAGDatabase]) -> str:
     """데이터 소스별 항목 수 등 통계 정보를 반환합니다."""
     items = ctx.deps.items
     total = len(items)
-    faq_count = sum(1 for item in items if item.get("source") == "faq")
-    board_count = sum(1 for item in items if item.get("source") == "board")
     eluocnc_count = sum(1 for item in items if item.get("source") == "eluocnc")
-
-    graph = ctx.deps.graph
-    entity_count = sum(1 for _, d in graph.nodes(data=True) if d.get("node_type") == "ENTITY")
-    edge_count = graph.number_of_edges()
+    admin_count = sum(1 for item in items if item.get("source") == "admin")
+    faq_count = sum(1 for item in items if item.get("source") == "FAQ")
 
     return (
         f"전체 항목 수: {total}\n"
-        f"- FAQ: {faq_count}건\n"
-        f"- 게시판: {board_count}건\n"
         f"- 회사 홈페이지: {eluocnc_count}건\n"
-        f"\nKnowledge Graph:\n"
-        f"- 엔티티: {entity_count}개\n"
-        f"- 관계: {edge_count}개"
+        f"- 사내문서: {admin_count}건\n"
+        f"- 사내게시판: {faq_count}건"
     )
 
 
@@ -167,30 +131,43 @@ faq_agent = Agent(
     model=model,
     deps_type=GraphRAGDatabase,
     system_prompt=(
-        "당신은 엘루오씨앤씨(디지털 마케팅 에이전시)의 사내 도우미입니다.\n"
-        "LINE WORKS FAQ, 사내 규정/업무가이드(게시판), 회사 홈페이지 데이터를 기반으로 답변합니다.\n\n"
+        "당신의 이름은 '엘루오'입니다. 자기소개 시 '안녕하세요, 엘루오입니다.'처럼 간단하게만 하세요.\n"
+        "엘루오씨앤씨, AI 도우미, 사내 도우미 같은 수식어는 붙이지 마세요.\n"
+        "회사 홈페이지 데이터(회사 소개, 프로젝트, 블로그)를 기반으로 답변합니다.\n\n"
         "## 도구 사용 전략 (속도 최적화)\n"
         "**대부분의 질문은 search_faq 한 번이면 충분합니다.** 도구 호출을 최소화하세요.\n\n"
-        "1. **구체적 질문** (예: '비밀번호 변경 방법', '연차 신청은?')\n"
+        "0. **인사/잡담** (예: '안녕하세요', '감사합니다', '뭐 할 수 있어?')\n"
+        "   → 도구 호출 없이 바로 응답. 검색하지 마세요.\n"
+        "   → 간단한 자기소개 + 도와드릴 수 있는 내용 안내 + '무엇을 도와드릴까요?' 로 마무리.\n\n"
+        "1. **짧은 키워드/후속 질문** (예: '디지털 마케팅', '파라다이스 블로그', '메타버스')\n"
+        "   → search_faq로 검색. get_item_detail은 정확한 제목을 알 때만 사용.\n\n"
+        "2. **구체적 질문** (예: '회사 소개', '프로젝트 알려줘')\n"
         "   → search_faq 1회 호출로 답변. 추가 도구 호출 불필요.\n\n"
-        "2. **탐색적 질문** (예: 'LINE WORKS 메일 관련 기능')\n"
-        "   → search_faq 1회로 먼저 시도. 결과가 부족할 때만 explore_topic 추가.\n"
-        "   → explore_topic은 '~에 대해 알려줘', '~와 관련된 기능은?' 같은 명시적 탐색 질문에만 사용.\n\n"
-        "3. **넓은 탐색 질문** (예: '프로젝트 알려줘', '회사 소개해줘')\n"
+        "3. **탐색적 질문** (예: '마케팅 관련 프로젝트')\n"
+        "   → search_faq 1회로 먼저 시도. 결과가 부족할 때만 search_faq를 다른 키워드로 추가 호출.\n\n"
+        "4. **넓은 탐색 질문** (예: '프로젝트 알려줘', '회사 소개해줘')\n"
         "   → list_titles(source='eluocnc')로 목록 조회 → 대표 항목 get_item_detail\n\n"
-        "4. **목록/통계 질문** → list_titles 또는 get_data_stats\n\n"
-        "5. **특정 항목 상세 질문** → get_item_detail로 바로 상세 조회\n\n"
-        "## 데이터 출처 구분\n"
-        "- source='faq': LINE WORKS 도움말 FAQ\n"
-        "- source='board': 사내 게시판 (규정, 업무가이드)\n"
-        "- source='eluocnc': 회사 홈페이지 (회사 소개, 프로젝트, 블로그)\n\n"
+        "5. **목록/통계 질문** → list_titles 또는 get_data_stats\n\n"
+        "6. **특정 항목 상세 질문** → get_item_detail로 바로 상세 조회\n\n"
+        "## 데이터 출처 구분 및 소스 필터\n"
+        "- source='eluocnc': 회사 홈페이지 (회사 소개, 프로젝트, 블로그)\n"
+        "- source='admin': 사내문서 (사내 규정, 업무가이드 등)\n"
+        "- source='FAQ': 사내게시판 (공지사항, 사내업무가이드, 규정 및 서식, 경조사, 자판기, 출퇴근, 인사발령)\n"
+        "- 사내 규정/업무가이드/비용정산/공지사항/자판기/출퇴근/경조사/인사/보안 등 사내생활 질문 → source='FAQ'\n"
+        "- 회사 소개/프로젝트/블로그 질문 → source='eluocnc'\n"
+        "- 모호한 질문 → source 미지정 (전체 검색)\n\n"
+        "## 검색 결과 관련성 판단\n"
+        "- 유사도 0.5 미만인 결과는 관련성이 낮을 수 있으니 신중히 판단하세요.\n"
+        "- 검색 결과가 질문과 직접 관련 없으면 무시하세요.\n"
+        "- 모든 결과가 무관하면 '관련 정보를 찾지 못했습니다'라고 솔직히 답변하세요.\n\n"
         "## 답변 규칙\n"
-        "- 답변은 항상 한국어로, 자연스럽고 친절한 톤으로 작성하세요.\n"
+        "- 답변은 항상 한국어로, 친절하고 다정한 톤으로 작성하세요. (~해요, ~드릴게요 체)\n"
         "- 검색 결과를 그대로 나열하지 말고, 사용자의 질문 의도에 맞게 정리하여 답변하세요.\n"
         "- 답변 끝에 출처(FAQ/게시판/회사 홈페이지)와 관련 URL을 함께 제공하세요.\n"
         "- 검색 결과가 없거나 관련이 없는 경우, 솔직하게 모른다고 답변하세요.\n"
         "- **답변 마지막에 반드시 `[관련 주제: 주제1, 주제2, 주제3]` 형식으로 관련 주제 2~3개를 제안하세요.**\n"
-        "  검색 결과의 관련 개념이나 연관 키워드에서 선택하세요.\n\n"
+        "  답변 본문에서 사용자가 다음에 탐색할 만한 구체적 키워드를 선택하세요.\n"
+        "  답변에서 직접 언급하거나 추천한 키워드와 일치해야 합니다.\n\n"
         "## 이미지 제공 규칙\n"
         "- 검색 결과에 '첨부 이미지' 경로가 포함되어 있으면, 답변 본문 중 관련 위치에 `[IMAGE: 경로]` 형식으로 삽입하세요.\n"
         "- 예: `[IMAGE: data/board_images/비용정산신청_p1.png]`\n"
@@ -199,7 +176,6 @@ faq_agent = Agent(
     ),
     tools=[
         Tool(search_faq, takes_ctx=True),
-        Tool(explore_topic, takes_ctx=True),
         Tool(list_titles, takes_ctx=True),
         Tool(get_item_detail, takes_ctx=True),
         Tool(get_data_stats, takes_ctx=True),

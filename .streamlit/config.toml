@@ -2,8 +2,57 @@
 headless = true
 port = 8501
 
+# ══════════════════════════════════════════════════
+# Theme — Based on docs/DESIGN_SYSTEM.md
+# Brand: Navy #00007F · Yellow #FEFE01 · Light #F0F0F0
+# ══════════════════════════════════════════════════
+
 [theme]
-primaryColor = "#6c5ce7"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f7f6f3"
-textColor = "#37352f"
+base = "light"
+
+# ── Custom Font: Pretendard Variable (§3.1) ──
+font = "Pretendard Variable, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
+headingFont = "Pretendard Variable, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
+codeFont = "monospace"
+
+baseFontSize = 16         # text-base (§3.2)
+baseFontWeight = 400
+
+codeFontSize = "0.875rem" # text-sm
+codeFontWeight = 400
+
+# ── Colors (§2.2 Light Mode OKLCH → HEX 변환) ──
+primaryColor = "#00007F"              # brand-navy (interactive elements)
+backgroundColor = "#FFFFFF"           # oklch(1 0 0)
+secondaryBackgroundColor = "#F5F5F5"  # oklch(0.97 0 0) ≈ --secondary/--muted
+textColor = "#1C1C1C"                # oklch(0.145 0 0) ≈ --foreground
+
+# ── Border & Radius (§4.1, §8) ──
+borderColor = "#E5E5E5"              # oklch(0.922 0 0) ≈ --border
+baseRadius = "0.625rem"              # --radius (10px)
+buttonRadius = "0.5rem"              # --radius-md (8px)
+showWidgetBorder = true
+showSidebarBorder = false
+
+# ── Code (§12.2 github-dark 기반) ──
+codeTextColor = "#22863A"            # greenTextColor 계열
+codeBackgroundColor = "#F5F5F5"      # --secondary
+
+# ── Links ──
+linkColor = "#00007F"                # brand-navy
+linkUnderline = true
+
+# ── Semantic Colors (§2.2) ──
+redColor = "#D1242F"                 # oklch(0.577 0.245 27.325) ≈ --destructive
+orangeColor = "#E16F24"
+yellowColor = "#C8A800"              # brand-yellow 계열 (어두운 버전 for readability)
+greenColor = "#1A7F37"
+blueColor = "#00007F"                # brand-navy
+violetColor = "#6C5CE7"
+grayColor = "#808080"                # oklch(0.556 0 0) ≈ --muted-foreground
+
+# ── Font Face 등록 (서버 재시작 필요) ──
+[[theme.fontFaces]]
+family = "Pretendard Variable"
+url = "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+weight = "100 900"
