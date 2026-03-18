@@ -202,8 +202,12 @@ class GraphRAGDatabase:
                 print(f"[warn] 리랭킹 실패, cosine 순서 유지: {e}")
 
         # ── 스코어 필터링 ──
-        score_key = "rerank_score" if results and "rerank_score" in results[0] else "score"
-        results = [r for r in results if r.get(score_key, 0) >= min_score]
+        # 리랭크 스코어(0~1, 보통 0.001~0.1)와 벡터 스코어(0~1, 보통 0.7~0.8)는 스케일이 다름
+        if results and "rerank_score" in results[0]:
+            rerank_threshold = min(min_score * 0.002, 0.0005)
+            results = [r for r in results if r.get("rerank_score", 0) >= rerank_threshold]
+        else:
+            results = [r for r in results if r.get("score", 0) >= min_score]
 
         return results[:top_k]
 

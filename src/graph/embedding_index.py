@@ -86,15 +86,15 @@ def search_records(
         hits = []
     normalized = []
     for hit in hits:
-        if isinstance(hit, dict):
-            hit_id = hit.get("_id", "")
-            hit_score = hit.get("_score", 0)
-            hit_meta = {k: v for k, v in hit.items() if k not in ("_id", "_score")}
+        d = hit.to_dict() if hasattr(hit, "to_dict") else (hit if isinstance(hit, dict) else {})
+        hit_id = d.get("_id", "")
+        hit_score = d.get("_score", 0)
+        # Integrated Index: 메타데이터가 fields 안에 있음
+        fields = d.get("fields", {})
+        if fields:
+            hit_meta = {k: v for k, v in fields.items() if k != INTEGRATED_TEXT_FIELD}
         else:
-            hit_id = getattr(hit, "_id", "") or getattr(hit, "id", "")
-            hit_score = getattr(hit, "_score", 0) or getattr(hit, "score", 0)
-            hit_dict = hit if isinstance(hit, dict) else (hit.to_dict() if hasattr(hit, "to_dict") else vars(hit))
-            hit_meta = {k: v for k, v in hit_dict.items() if k not in ("_id", "_score")}
+            hit_meta = {k: v for k, v in d.items() if k not in ("_id", "_score", "fields")}
         normalized.append({"id": hit_id, "score": hit_score, "metadata": hit_meta})
     return normalized
 
