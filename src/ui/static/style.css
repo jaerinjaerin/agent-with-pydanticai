@@ -107,52 +107,135 @@ section[data-testid="stSidebar"],
 
 /* ── 웰컴 카드 ── */
 .welcome-card {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 80px 24px;
+    position: fixed;
+    top: 35%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    z-index: 10;
 }
 
 .welcome-greeting {
-    font-size: 1.6rem;
+    font-size: 2.2rem;
     font-weight: 700;
     color: #00007F;
     letter-spacing: -0.03em;
     line-height: 1;
 }
 
-/* ── 채팅 메시지 커스텀 ── */
-/* 유저 메시지 배경 */
-[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-    background: rgba(0, 0, 127, 0.04) !important;
-    border-color: rgba(0, 0, 127, 0.06) !important;
+/* ── 채팅 메시지 — 메신저 스타일 버블 ── */
+
+/* 공통: 메시지 컨테이너 배경/테두리 제거 */
+[data-testid="stChatMessage"] {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    margin: 0 !important;
 }
 
-/* 어시스턴트 메시지 배경 */
-[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
-    background: #FFFFFF !important;
-    border: 1px solid #E5E5E5 !important;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+/* 아바타 숨김 */
+[data-testid="stChatMessage"] > img {
+    display: none !important;
 }
 
-/* 아바타 둥근 사각형 */
-[data-testid="stChatMessage"] img[data-testid="chatAvatarIcon-image"] {
-    border-radius: 8px !important;
+/* stChatMessageContent 기본 margin 제거 */
+[data-testid="stChatMessageContent"] {
+    margin: 0 !important;
 }
 
-/* ── 모델 선택 드롭다운 (입력창 하단 고정) ── */
-div[data-testid="stSelectbox"]:has(div[data-baseweb="select"]) {
-    position: fixed;
-    bottom: 12px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 99998;
-    width: auto;
+/* ── 유저 메시지 — 오른쪽 정렬, 네이비 버블 ── */
+[data-testid="stChatMessage"]:has(.msg-marker-user) {
+    flex-direction: row-reverse !important;
+}
+
+[data-testid="stChatMessage"]:has(.msg-marker-user) > div:last-child {
+    background: #00007F !important;
+    color: #FFFFFF !important;
+    border-radius: 18px 18px 4px 18px !important;
+    padding: 12px 16px !important;
+    flex: none !important;
+    width: fit-content !important;
+    max-width: 70% !important;
+    margin-left: auto !important;
+}
+
+/* 유저 버블 내 마크다운 텍스트 색상 */
+[data-testid="stChatMessage"]:has(.msg-marker-user) > div:last-child p,
+[data-testid="stChatMessage"]:has(.msg-marker-user) > div:last-child span,
+[data-testid="stChatMessage"]:has(.msg-marker-user) > div:last-child li {
+    color: #FFFFFF !important;
+}
+
+/* ── 봇 메시지 — 왼쪽 정렬, 밝은 골드 버블 ── */
+[data-testid="stChatMessage"]:has(.msg-marker-assistant) > div:last-child {
+    background: #FFF9DB !important;
+    border-radius: 18px 18px 18px 4px !important;
+    padding: 12px 16px !important;
+    flex: none !important;
+    width: fit-content !important;
+    max-width: 75% !important;
+    min-width: 60px !important;
+    overflow-wrap: break-word !important;
+}
+
+/* 봇 버블 내 이미지 둥근 모서리 */
+[data-testid="stChatMessage"]:has(.msg-marker-assistant) img:not([data-testid="chatAvatarIcon-image"]) {
+    border-radius: 12px !important;
+    margin: 8px 0 !important;
+}
+
+/* ── 타임스탬프 ── */
+.msg-timestamp {
+    font-size: 0.68rem;
+    color: #808080;
+    padding: 2px 16px;
+    margin-top: -8px;
+}
+
+/* ── 모델 선택 드롭다운 ── */
+
+/* JS 이동 전: 메인 콘텐츠 영역에 있을 때 숨김 (이동 전 깜빡임 방지) */
+div[data-testid="stMainBlockContainer"] div[data-testid="stSelectbox"] {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    position: absolute !important;
+    width: 0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+}
+
+/* JS 이동 후: stChatInput 안에 있을 때 — 전송 버튼 왼쪽에 absolute 배치 */
+[data-testid="stChatInput"] div[data-testid="stSelectbox"] {
+    position: absolute !important;
+    bottom: 8px !important;
+    right: 48px !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    z-index: 10;
+    width: auto !important;
+    height: auto !important;
     min-width: 200px;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    overflow: visible !important;
+}
+
+/* stChatInput 외부 컨테이너: relative 기준점 + 하단 패딩 (selectbox 행) */
+[data-testid="stChatInput"] > div:first-child {
+    position: relative !important;
+    padding-bottom: 44px !important;
+}
+
+/* 전송 버튼 래퍼: 하단 오른쪽으로 이동 */
+[data-testid="stChatInput"] div:has(> [data-testid="stChatInputSubmitButton"]) {
+    position: absolute !important;
+    bottom: 8px !important;
+    right: 8px !important;
 }
 
 div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-    background: #FFFFFF !important;
+    background: transparent !important;
     border: 1px solid #E5E5E5 !important;
     border-radius: 20px !important;
     padding: 0 16px !important;
@@ -166,7 +249,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
     align-items: center !important;
     cursor: pointer;
     transition: all 0.2s ease;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    box-shadow: none;
 }
 
 div[data-testid="stSelectbox"] div[data-baseweb="select"] > div > div {
@@ -362,14 +445,13 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 [data-testid="stVerticalBlock"]:has(.related-topics-row) {
     width: 100% !important;
     padding: 4px 16px 10px !important;
-    margin-top: -12px !important;
+    margin-top: -8px !important;
     gap: 0 !important;
     box-sizing: border-box !important;
-    background: #FFFFFF !important;
-    border: 1px solid #E5E5E5 !important;
-    border-top: none !important;
-    border-radius: 0 0 10px 10px !important;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
 }
 
 [data-testid="stVerticalBlock"]:has(.related-topics-row) .related-topics-row {
@@ -440,12 +522,8 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
 
 /* ── 반응형 ── */
 @media (max-width: 768px) {
-    .welcome-card {
-        padding: 48px 16px;
-    }
-
     .welcome-greeting {
-        font-size: 1.25rem;
+        font-size: 1.5rem;
     }
 
     .pinecone-badge {
@@ -455,11 +533,34 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
         padding: 4px 10px;
     }
 
+    /* 버블 max-width 확장 */
+    [data-testid="stChatMessage"]:has(.msg-marker-user) > div:last-child {
+        max-width: 90% !important;
+    }
+
+    [data-testid="stChatMessage"]:has(.msg-marker-assistant) > div:last-child {
+        max-width: 90% !important;
+    }
+
+    .msg-timestamp {
+        padding: 2px 16px;
+    }
+
+    [data-testid="stVerticalBlock"]:has(.related-topics-row) {
+        padding-left: 16px !important;
+    }
+
     [data-testid="stVerticalBlock"]:has(.related-topics-row) [data-testid="stHorizontalBlock"] {
         flex-wrap: wrap !important;
     }
 
     [data-testid="stVerticalBlock"]:has(.related-topics-row) button {
         white-space: normal !important;
+    }
+
+    /* 모바일: 셀렉트박스 축소 */
+    [data-testid="stChatInput"] div[data-testid="stSelectbox"] {
+        min-width: 120px !important;
+        right: 44px !important;
     }
 }

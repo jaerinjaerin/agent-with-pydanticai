@@ -7,6 +7,7 @@ PydanticAI 에이전트 기반 사내 지식 검색 챗봇.
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # sniffio 패치 + 백그라운드 루프 — 반드시 첫 번째 import
@@ -52,20 +53,16 @@ def _render_message_with_images(text: str) -> None:
             if stripped:
                 st.markdown(stripped)
         else:
-            # 이미지 경로/URL 부분
+            # 이미지 경로/URL 부분 — 버블 안에서 직접 렌더링
             img_ref = part.strip()
-            col, _, _ = st.columns([1, 2, 0.01])
-            with col:
-                if img_ref.startswith(("http://", "https://")):
-                    # S3 URL 등 외부 이미지
-                    st.image(img_ref, use_container_width=True)
+            if img_ref.startswith(("http://", "https://")):
+                st.image(img_ref, use_container_width=True)
+            else:
+                img_path = PROJECT_ROOT / img_ref
+                if img_path.exists():
+                    st.image(str(img_path), use_container_width=True)
                 else:
-                    # 로컬 파일 경로 (하위호환)
-                    img_path = PROJECT_ROOT / img_ref
-                    if img_path.exists():
-                        st.image(str(img_path), use_container_width=True)
-                    else:
-                        st.caption(f"(이미지를 찾을 수 없습니다: {img_ref})")
+                    st.caption(f"(이미지를 찾을 수 없습니다: {img_ref})")
 
 
 # 자체 완결형 스크롤 트리거 (iframe 내에서 parent document 직접 조작, 1회성)
@@ -100,9 +97,21 @@ st.markdown(f"<style>\n{_STATIC.joinpath('style.css').read_text()}\n</style>", u
 
 # JS 로드 (components.html은 iframe 생성 → script 실행 보장)
 components.html(
-    f"<script>\n{_STATIC.joinpath('scroll_lock.js').read_text()}\n</script>",
+    f"<script>\n{_STATIC.joinpath('scroll_lock.js').read_text()}\n</script>"
+    f"<script>\n{_STATIC.joinpath('input_layout.js').read_text()}\n</script>",
     height=0,
 )
+
+
+def _format_timestamp() -> str:
+    """현재 시각을 '오후 05:17' 형식으로 반환한다."""
+    now = datetime.now()
+    hour = now.hour
+    period = "오전" if hour < 12 else "오후"
+    display_hour = hour if hour <= 12 else hour - 12
+    if display_hour == 0:
+        display_hour = 12
+    return f"{period} {display_hour:02d}:{now.minute:02d}"
 
 
 @st.cache_resource
@@ -148,88 +157,150 @@ if "scroll_to_bottom" not in st.session_state:
 if "model_choice" not in st.session_state:
     st.session_state.model_choice = list(MODEL_OPTIONS.keys())[0]
 
-# 버튼 클릭 후 rerun 시 스크롤 트리거
-if st.session_state.scroll_to_bottom:
-    st.session_state.scroll_to_bottom = False
-    components.html(_SCROLL_TRIGGER_JS, height=0)
+def _run_chat():
+    # 버튼 클릭 후 rerun 시 스크롤 트리거
+    if st.session_state.scroll_to_bottom:
+        st.session_state.scroll_to_bottom = False
+        components.html(_SCROLL_TRIGGER_JS, height=0)
 
-# 웰컴 — 대화 시작 전에만 표시
-welcome_slot = st.empty()
-if not st.session_state.messages:
-    welcome_slot.markdown("""
-    <div class="welcome-card">
-        <div class="welcome-greeting">Ask Eluo</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # 웰컴 — 대화 시작 전에만 표시
+    welcome_slot = st.empty()
+    if not st.session_state.messages:
+        welcome_slot.markdown("""
+        <div class="welcome-card">
+            <div class="welcome-greeting">Hello, I'm Eluo :)</div>
+        </div>
+        """, unsafe_allow_html=True)
+        # 초기 화면: 입력창을 화면 중앙으로 이동 (셀렉트박스는 JS가 내부 배치)
+        st.markdown("""<style>
+        [data-testid="stChatInput"] {
+            position: fixed !important;
+            bottom: auto !important;
+            top: 40% !important;
+            left: 50% !important;
+            transform: translate(-50%, 0) !important;
+            max-width: 680px !important;
+            width: 90% !important;
+        }
+        [data-testid="stChatInput"] textarea {
+            min-height: 56px !important;
+            font-size: 1.05rem !important;
+        }
+        </style>""", unsafe_allow_html=True)
 
-# 대화 히스토리 표시
-for idx, msg in enumerate(st.session_state.messages):
-    avatar = _AVATAR_BOT if msg["role"] == "assistant" else _AVATAR_USER
-    with st.chat_message(msg["role"], avatar=avatar):
-        if msg["role"] == "assistant" and _IMAGE_RE.search(msg["content"]):
-            _render_message_with_images(msg["content"])
-        else:
-            st.markdown(msg["content"])
-    if msg["role"] == "assistant" and msg.get("related_topics"):
-        with st.container():
-            st.markdown('<div class="related-topics-row">', unsafe_allow_html=True)
-            cols = st.columns(len(msg["related_topics"]))
-            for col, topic in zip(cols, msg["related_topics"]):
-                if col.button(f"💡 {topic}", key=f"topic_{idx}_{topic}"):
-                    st.session_state.pending_input = topic
-                    st.session_state.scroll_to_bottom = True
-                    st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+    # 마지막 assistant 메시지 인덱스 계산 (관련 주제 버튼은 마지막 답변에만 표시)
+    last_assistant_idx = None
+    for i in range(len(st.session_state.messages) - 1, -1, -1):
+        if st.session_state.messages[i]["role"] == "assistant":
+            last_assistant_idx = i
+            break
 
-# ── 모델 선택 드롭다운 (입력창 바로 위) ──
-def _on_model_change():
-    st.session_state.model_choice = st.session_state._model_select_widget
-
-selected_model_label = st.selectbox(
-    "모델 선택",
-    options=list(MODEL_OPTIONS.keys()),
-    index=list(MODEL_OPTIONS.keys()).index(st.session_state.model_choice),
-    key="_model_select_widget",
-    on_change=_on_model_change,
-    label_visibility="collapsed",
-)
-_provider, _model_id = MODEL_OPTIONS[st.session_state.model_choice]
-selected_model = _build_model(_provider, _model_id)
-
-# pending_input이 있으면 자동 실행
-_pending = st.session_state.pending_input
-st.session_state.pending_input = None
-prompt = st.chat_input("질문을 입력하세요...") or _pending
-if prompt:
-    welcome_slot.empty()
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar=_AVATAR_USER):
-        st.markdown(prompt)
-
-    # 하단 스크롤 트리거 (components.html → iframe 내 JS 실행)
-    components.html(_SCROLL_TRIGGER_JS, height=0)
-
-    related_topics = []
-    with st.chat_message("assistant", avatar=_AVATAR_BOT):
-        placeholder = st.empty()
-
-        async def _stream(user_prompt, deps, history):
-            """PydanticAI run_stream_events로 최종 답변만 스트리밍한다."""
-            import time
-
-            from pydantic_ai import (
-                AgentRunResultEvent,
-                FunctionToolCallEvent,
-                FunctionToolResultEvent,
-                PartDeltaEvent,
-                TextPartDelta,
+    # 대화 히스토리 표시
+    for idx, msg in enumerate(st.session_state.messages):
+        avatar = _AVATAR_BOT if msg["role"] == "assistant" else _AVATAR_USER
+        marker_cls = "msg-marker-assistant" if msg["role"] == "assistant" else "msg-marker-user"
+        with st.chat_message(msg["role"], avatar=avatar):
+            st.markdown(f'<span class="{marker_cls}" style="display:none"></span>', unsafe_allow_html=True)
+            if msg["role"] == "assistant" and _IMAGE_RE.search(msg["content"]):
+                try:
+                    _render_message_with_images(msg["content"])
+                except Exception:
+                    st.markdown(_IMAGE_RE.sub("", msg["content"]))
+            else:
+                st.markdown(msg["content"])
+        # 타임스탬프 표시
+        ts = msg.get("timestamp", "")
+        if ts:
+            align = "right" if msg["role"] == "user" else "left"
+            st.markdown(
+                f'<div class="msg-timestamp" style="text-align:{align}">{ts}</div>',
+                unsafe_allow_html=True,
             )
+        if msg["role"] == "assistant" and msg.get("related_topics") and idx == last_assistant_idx:
+            with st.container():
+                st.markdown('<div class="related-topics-row">', unsafe_allow_html=True)
+                cols = st.columns(len(msg["related_topics"]))
+                for col, topic in zip(cols, msg["related_topics"]):
+                    safe_key = re.sub(r"[^\w가-힣]", "_", topic)
+                    if col.button(f"💡 {topic}", key=f"topic_{idx}_{safe_key}"):
+                        st.session_state.pending_input = topic
+                        st.session_state.scroll_to_bottom = True
+                        st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
 
-            full_text = ""
-            final_output = ""
-            last_render = 0.0
-            render_interval = 0.05
-            _loading_html = """<style>
+    # ── 모델 선택 드롭다운 (입력창 바로 위) ──
+    def _on_model_change():
+        st.session_state.model_choice = st.session_state._model_select_widget
+
+    selected_model_label = st.selectbox(
+        "모델 선택",
+        options=list(MODEL_OPTIONS.keys()),
+        index=list(MODEL_OPTIONS.keys()).index(st.session_state.model_choice),
+        key="_model_select_widget",
+        on_change=_on_model_change,
+        label_visibility="collapsed",
+    )
+    _provider, _model_id = MODEL_OPTIONS[st.session_state.model_choice]
+    selected_model = _build_model(_provider, _model_id)
+
+    # pending_input이 있으면 자동 실행
+    _pending = st.session_state.pending_input
+    st.session_state.pending_input = None
+    prompt = st.chat_input("질문을 입력하세요...") or _pending
+    if prompt:
+        welcome_slot.empty()
+        # 웰컴 CSS 해제 — 입력창을 기본 하단 위치로 복원
+        st.markdown("""<style>
+        [data-testid="stChatInput"] {
+            position: static !important;
+            top: auto !important;
+            left: auto !important;
+            transform: none !important;
+            max-width: none !important;
+            width: auto !important;
+        }
+        [data-testid="stChatInput"] textarea {
+            min-height: auto !important;
+            font-size: inherit !important;
+        }
+        </style>""", unsafe_allow_html=True)
+        user_ts = _format_timestamp()
+        st.session_state.messages.append({"role": "user", "content": prompt, "timestamp": user_ts})
+        with st.chat_message("user", avatar=_AVATAR_USER):
+            st.markdown('<span class="msg-marker-user" style="display:none"></span>', unsafe_allow_html=True)
+            st.markdown(prompt)
+        st.markdown(
+            f'<div class="msg-timestamp" style="text-align:right">{user_ts}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # 하단 스크롤 트리거 (components.html → iframe 내 JS 실행)
+        components.html(_SCROLL_TRIGGER_JS, height=0)
+
+        related_topics = []
+        with st.chat_message("assistant", avatar=_AVATAR_BOT):
+            st.markdown('<span class="msg-marker-assistant" style="display:none"></span>', unsafe_allow_html=True)
+            placeholder = st.empty()
+
+            async def _stream(user_prompt, deps, history):
+                """PydanticAI run_stream_events로 최종 답변만 스트리밍한다."""
+                import time
+
+                from pydantic_ai import (
+                    AgentRunResultEvent,
+                    FunctionToolCallEvent,
+                    FunctionToolResultEvent,
+                    PartDeltaEvent,
+                    PartStartEvent,
+                    TextPartDelta,
+                )
+                from pydantic_ai.messages import TextPart
+
+                full_text = ""
+                final_output = ""
+                last_render = 0.0
+                render_interval = 0.05
+                _loading_html = """<style>
 @keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
 @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
 .dots{display:inline-flex;gap:5px;padding:8px 0}
@@ -238,89 +309,121 @@ animation:pulse 1.4s ease-in-out infinite,bounce 1.4s ease-in-out infinite}
 .dots span:nth-child(2){animation-delay:.2s}
 .dots span:nth-child(3){animation-delay:.4s}
 </style><div class="dots"><span></span><span></span><span></span></div>"""
-            placeholder.markdown(_loading_html, unsafe_allow_html=True)
-            print(f"[Model] {_model_id} (provider: {_provider})")
-            all_msgs = []
-            async for event in faq_agent.run_stream_events(
-                user_prompt=user_prompt,
-                deps=deps,
-                message_history=history or None,
-                model=selected_model,
-            ):
-                if isinstance(event, AgentRunResultEvent):
-                    all_msgs = event.result.all_messages()
-                    final_output = event.result.output
-                elif isinstance(event, FunctionToolCallEvent):
-                    tool_name = event.part.tool_name
-                    _tool_labels = {
-                        "search_faq": "🔍 검색 중...",
-                        "list_titles": "📋 목록 조회 중...",
-                        "get_item_detail": "📄 상세 조회 중...",
-                        "get_data_stats": "📊 통계 조회 중...",
-                    }
-                    status_msg = _tool_labels.get(tool_name, f"⏳ {tool_name} 실행 중...")
-                    placeholder.markdown(status_msg)
-                elif isinstance(event, FunctionToolResultEvent):
-                    full_text = ""
-                elif isinstance(event, PartDeltaEvent):
-                    if isinstance(event.delta, TextPartDelta):
-                        full_text += event.delta.content_delta
-                        now = time.monotonic()
-                        if now - last_render >= render_interval:
+                placeholder.markdown(_loading_html, unsafe_allow_html=True)
+                print(f"[Model] {_model_id} (provider: {_provider})")
+                all_msgs = []
+                async for event in faq_agent.run_stream_events(
+                    user_prompt=user_prompt,
+                    deps=deps,
+                    message_history=history or None,
+                    model=selected_model,
+                ):
+                    if isinstance(event, AgentRunResultEvent):
+                        all_msgs = event.result.all_messages()
+                        final_output = event.result.output
+                    elif isinstance(event, FunctionToolCallEvent):
+                        tool_name = event.part.tool_name
+                        _tool_labels = {
+                            "search_faq": "🔍 검색 중...",
+                            "list_titles": "📋 목록 조회 중...",
+                            "get_item_detail": "📄 상세 조회 중...",
+                            "get_data_stats": "📊 통계 조회 중...",
+                        }
+                        status_msg = _tool_labels.get(tool_name, f"⏳ {tool_name} 실행 중...")
+                        placeholder.markdown(status_msg)
+                    elif isinstance(event, FunctionToolResultEvent):
+                        pass
+                    elif isinstance(event, PartStartEvent):
+                        if isinstance(event.part, TextPart) and event.part.content:
+                            full_text += event.part.content
                             placeholder.markdown(full_text)
-                            last_render = now
-            answer = final_output or full_text or "답변을 생성하지 못했습니다."
-            placeholder.markdown(answer)
-            return answer, all_msgs
+                            last_render = time.monotonic()
+                    elif isinstance(event, PartDeltaEvent):
+                        if isinstance(event.delta, TextPartDelta):
+                            full_text += event.delta.content_delta
+                            now = time.monotonic()
+                            if now - last_render >= render_interval:
+                                placeholder.markdown(full_text)
+                                last_render = now
+                if full_text:
+                    placeholder.markdown(full_text)
+                answer = final_output or full_text or "답변을 생성하지 못했습니다."
+                if answer != full_text:
+                    placeholder.markdown(answer)
+                return answer, all_msgs
 
-        try:
-            answer, all_messages = run_async(
-                _stream(prompt, faq_db, st.session_state.pydantic_history)
-            )
-            st.session_state.pydantic_history = all_messages
-        except Exception:
             try:
                 answer, all_messages = run_async(
-                    _stream(prompt, faq_db, None)
+                    _stream(prompt, faq_db, st.session_state.pydantic_history)
                 )
                 st.session_state.pydantic_history = all_messages
-            except Exception as e:
-                err_str = str(e)
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "rate" in err_str.lower():
-                    answer = (
-                        "⚠️ 현재 선택된 모델의 API 호출 한도에 도달했습니다.\n\n"
-                        "다른 모델을 선택하거나 잠시 후 다시 시도해주세요."
+            except Exception:
+                try:
+                    answer, all_messages = run_async(
+                        _stream(prompt, faq_db, None)
                     )
-                else:
-                    answer = f"죄송합니다. 오류가 발생했습니다: {e}"
+                    st.session_state.pydantic_history = all_messages
+                except Exception as e:
+                    st.session_state.pydantic_history = []
+                    err_str = str(e)
+                    if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "rate" in err_str.lower():
+                        answer = (
+                            "⚠️ 현재 선택된 모델의 API 호출 한도에 도달했습니다.\n\n"
+                            "다른 모델을 선택하거나 잠시 후 다시 시도해주세요."
+                        )
+                    else:
+                        answer = f"죄송합니다. 오류가 발생했습니다: {e}"
+                    placeholder.markdown(answer)
+
+            # 관련 주제 파싱
+            clean_answer, related_topics = _parse_related_topics(answer)
+            if clean_answer != answer:
+                answer = clean_answer
                 placeholder.markdown(answer)
 
-        # 관련 주제 파싱
-        clean_answer, related_topics = _parse_related_topics(answer)
-        if clean_answer != answer:
-            answer = clean_answer
-            placeholder.markdown(answer)
+            # 이미지가 포함된 답변이면 placeholder를 비우고 이미지 포함 렌더링
+            if _IMAGE_RE.search(answer):
+                try:
+                    placeholder.empty()
+                    _render_message_with_images(answer)
+                except Exception:
+                    placeholder.markdown(_IMAGE_RE.sub("", answer))
 
-        # 이미지가 포함된 답변이면 placeholder를 비우고 이미지 포함 렌더링
-        if _IMAGE_RE.search(answer):
-            placeholder.empty()
-            _render_message_with_images(answer)
+        # 봇 타임스탬프 렌더링
+        bot_ts = _format_timestamp()
+        st.markdown(
+            f'<div class="msg-timestamp" style="text-align:left">{bot_ts}</div>',
+            unsafe_allow_html=True,
+        )
 
-    # 관련 주제 버튼 렌더링 (chat_message 밖 — 위젯 트리 안정성 확보)
-    if related_topics:
-        with st.container():
-            st.markdown('<div class="related-topics-row">', unsafe_allow_html=True)
-            msg_idx = len(st.session_state.messages)
-            cols = st.columns(len(related_topics))
-            for col, topic in zip(cols, related_topics):
-                if col.button(f"💡 {topic}", key=f"topic_{msg_idx}_{topic}"):
-                    st.session_state.pending_input = topic
-                    st.session_state.scroll_to_bottom = True
-                    st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+        # 관련 주제 버튼 렌더링 (chat_message 밖 — 위젯 트리 안정성 확보)
+        if related_topics:
+            with st.container():
+                st.markdown('<div class="related-topics-row">', unsafe_allow_html=True)
+                msg_idx = len(st.session_state.messages)
+                cols = st.columns(len(related_topics))
+                for col, topic in zip(cols, related_topics):
+                    safe_key = re.sub(r"[^\w가-힣]", "_", topic)
+                    if col.button(f"💡 {topic}", key=f"topic_{msg_idx}_{safe_key}"):
+                        st.session_state.pending_input = topic
+                        st.session_state.scroll_to_bottom = True
+                        st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
 
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": answer,
-        "related_topics": related_topics if related_topics else [],
-    })
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": answer,
+            "related_topics": related_topics if related_topics else [],
+            "timestamp": bot_ts,
+        })
+        st.rerun()
+
+
+try:
+    _run_chat()
+except Exception as e:
+    st.error(f"예기치 않은 오류가 발생했습니다: {e}")
+    if st.button("대화 초기화"):
+        st.session_state.messages = []
+        st.session_state.pydantic_history = []
+        st.rerun()

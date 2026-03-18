@@ -193,7 +193,7 @@ class GraphRAGDatabase:
                 if img_path not in images:
                     images.insert(0, img_path)
             # content_preview 키 우선 사용
-            content = meta.get("content_preview", meta.get("content", meta.get("text", r.get("content", ""))))[:500]
+            content = meta.get("content_preview", meta.get("content", meta.get("text", r.get("content", ""))))[:1500]
             results.append({
                 "title": meta.get("title", r.get("title", "")),
                 "content": content,
@@ -218,10 +218,54 @@ class GraphRAGDatabase:
 
         return results[:top_k]
 
+    # ── 키워드 기반 폴백 검색 ──
+
+    def keyword_search(self, query: str, top_k: int = 3, source: str = "") -> list[dict]:
+        """키워드 기반 제목/내용 매칭 검색 (벡터 검색 보완용)."""
+        keywords = [w for w in query.split() if len(w) >= 2]
+        if not keywords:
+            return []
+
+        scored_items: list[tuple[float, dict]] = []
+        for item in self.items:
+            if source and item.get("source") != source:
+                continue
+            title = item.get("title", "").lower()
+            content = item.get("content", "")[:2000].lower()
+
+            score = 0.0
+            for kw in keywords:
+                kw_lower = kw.lower()
+                if kw_lower in title:
+                    score += 0.3
+                if kw_lower in content:
+                    score += 0.15
+                    # 내용에서 키워드가 자주 등장하면 가산점
+                    count = content.count(kw_lower)
+                    if count >= 3:
+                        score += 0.1
+
+            if score > 0:
+                scored_items.append((min(score, 0.9), item))
+
+        scored_items.sort(key=lambda x: x[0], reverse=True)
+        results = []
+        for score, item in scored_items[:top_k]:
+            images = self._collect_images(item)
+            results.append({
+                "title": item.get("title", ""),
+                "content": item.get("content", "")[:1500],
+                "url": item.get("url", ""),
+                "source": item.get("source", ""),
+                "score": score,
+                "images": images,
+            })
+        return results
+
     # ── 검색 인터페이스 ──
 
     def search(self, query: str, top_k: int = 5, min_score: float = 0.25, source: str = "") -> list[dict]:
-        """벡터 검색을 수행한다. 캐시 지원."""
+        """벡터 검색을 수행한다. 결과 부족 시 키워드 폴백. 캐시 지원."""
         cache_key = (query, top_k, min_score, source)
         if cache_key in self._search_cache:
             cached_time, cached_result = self._search_cache[cache_key]
@@ -232,6 +276,24 @@ class GraphRAGDatabase:
                 del self._search_cache[cache_key]
 
         results = self.vector_search(query, top_k=top_k, min_score=min_score, source=source)
+
+        # 벡터 검색 결과가 부족하면 키워드 폴백으로 보완
+        if len(results) < 3:
+            kw_results = self.keyword_search(query, top_k=top_k - len(results), source=source)
+            existing_urls = {r.get("url", "") for r in results}
+            for kr in kw_results:
+                if kr["url"] not in existing_urls:
+                    results.append(kr)
+                    existing_urls.add(kr["url"])
+            # source 필터 사용 시, 결과가 여전히 부족하면 전체 소스에서 키워드 폴백
+            if source and len(results) < 3:
+                kw_all = self.keyword_search(query, top_k=2, source="")
+                for kr in kw_all:
+                    if kr["url"] not in existing_urls:
+                        results.append(kr)
+                        existing_urls.add(kr["url"])
+
+        results = results[:top_k]
 
         # 캐시 저장
         self._search_cache[cache_key] = (time.monotonic(), results)
