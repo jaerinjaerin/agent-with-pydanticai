@@ -386,9 +386,9 @@ def _process_images(
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
     try:
-        from storage.r2_storage import is_configured as s3_configured, upload_image
+        from storage.s3_storage import is_configured as s3_configured, upload_image
     except ImportError:
-        print("    [warn] r2_storage 모듈을 로드할 수 없습니다.")
+        print("    [warn] s3_storage 모듈을 로드할 수 없습니다.")
         return [], []
 
     if not s3_configured():
@@ -438,7 +438,7 @@ def _generate_descriptions_and_vectorize(
 
     try:
         from graph.image_describer import describe_image_bytes
-        from graph.embedding_index import get_embed_model, init_pinecone
+        from graph.embedding_index import init_pinecone
         from graph.ingest import ingest_images
     except ImportError as e:
         print(f"    [warn] 벡터화 모듈 로드 실패: {e}")
@@ -461,14 +461,12 @@ def _generate_descriptions_and_vectorize(
 
     # 벡터화
     try:
-        embed_model = get_embed_model()
         pinecone_index = init_pinecone()
         count = ingest_images(
             image_paths=image_urls,
             title=post_data.get("title", ""),
             url=post_data.get("url", ""),
             source="FAQ",
-            embed_model=embed_model,
             pinecone_index=pinecone_index,
             descriptions=descriptions,
         )

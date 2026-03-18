@@ -288,6 +288,7 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] div[value] {
 div[data-testid="stSelectbox"] div[data-baseweb="select"],
 div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     cursor: pointer !important;
+    caret-color: transparent !important;
 }
 
 /* ── 채팅 입력창 포커스 커스텀 ── */

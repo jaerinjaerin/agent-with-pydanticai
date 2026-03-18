@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.models.anthropic import AnthropicModel
 
-from .embedding_index import get_embed_model, embed_documents
+import os
 
 
 # ── Pydantic 스키마 ──
@@ -37,6 +37,18 @@ class DocumentGraphExtraction(BaseModel):
 
 
 # ── 엔티티/관계 추출 에이전트 ──
+
+def _embed_texts_via_pinecone(texts: list[str]) -> list[list[float]]:
+    """Pinecone Inference API로 텍스트 임베딩."""
+    from pinecone import Pinecone
+    pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY", ""))
+    response = pc.inference.embed(
+        model="multilingual-e5-large",
+        inputs=texts,
+        parameters={"input_type": "passage"},
+    )
+    return [e.values for e in response.data]
+
 
 extraction_agent = Agent(
     model=AnthropicModel("claude-sonnet-4-20250514"),
@@ -84,12 +96,11 @@ def resolve_duplicate_entities(
     if not all_entities:
         return {}
 
-    model = get_embed_model()
     names = list({e["name"] for e in all_entities})
     if len(names) <= 1:
         return {n: n for n in names}
 
-    vectors = embed_documents(model, names)
+    vectors = _embed_texts_via_pinecone(names)
 
     from sklearn.metrics.pairwise import cosine_similarity as cos_sim
     import numpy as np
@@ -181,7 +192,7 @@ def build_networkx_graph(
 
 
 async def add_doc_to_graph(
-    graph: nx.Graph, doc: dict, embed_model=None
+    graph: nx.Graph, doc: dict
 ) -> nx.Graph:
     """단일 문서를 기존 그래프에 추가한다.
 

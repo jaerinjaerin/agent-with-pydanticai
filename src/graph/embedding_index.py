@@ -1,73 +1,102 @@
 """
 임베딩 + Pinecone 벡터 인덱스 모듈.
 
-sentence-transformers로 임베딩을 생성하고,
-Pinecone에 저장/검색하는 기능을 제공한다.
+Pinecone Integrated Index (multilingual-e5-large)를 사용하여
+서버사이드 임베딩 + 검색을 제공한다.
 """
 
 import hashlib
 import os
 from typing import Any
 
-from sentence_transformers import SentenceTransformer
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone
 
-EMBED_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
-PINECONE_INDEX_NAME = "eluocnc-faq"
-EMBED_DIM = 384
-
-
-def get_embed_model() -> SentenceTransformer:
-    """sentence-transformers 임베딩 모델을 로드한다."""
-    return SentenceTransformer(EMBED_MODEL_NAME)
-
-
-def embed_documents(model: SentenceTransformer, texts: list[str]) -> list[list[float]]:
-    """문서 리스트를 임베딩 벡터 리스트로 변환한다."""
-    embeddings = model.encode(texts, show_progress_bar=True, batch_size=64)
-    return embeddings.tolist()
-
-
-def embed_query(model: SentenceTransformer, query: str) -> list[float]:
-    """단일 쿼리를 임베딩 벡터로 변환한다."""
-    return model.encode(query).tolist()
+PINECONE_INDEX_NAME = "eluocnc-faq-v2"
+INTEGRATED_MODEL = "multilingual-e5-large"
+INTEGRATED_TEXT_FIELD = "chunk_text"
 
 
 def init_pinecone(api_key: str | None = None, index_name: str = PINECONE_INDEX_NAME) -> Any:
-    """Pinecone 인덱스를 초기화하고 반환한다. 인덱스가 없으면 생성."""
+    """Integrated Index를 생성/연결한다. 인덱스가 없으면 생성."""
     api_key = api_key or os.environ.get("PINECONE_API_KEY", "")
     pc = Pinecone(api_key=api_key)
 
     if index_name not in [idx.name for idx in pc.list_indexes()]:
-        pc.create_index(
+        pc.create_index_for_model(
             name=index_name,
-            dimension=EMBED_DIM,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+            cloud="aws",
+            region="us-east-1",
+            embed={
+                "model": INTEGRATED_MODEL,
+                "field_map": {"text": INTEGRATED_TEXT_FIELD},
+            },
         )
 
     return pc.Index(index_name)
 
 
-def upsert_vectors(
+def upsert_records(
     index: Any,
     ids: list[str],
-    vectors: list[list[float]],
+    texts: list[str],
     metadata_list: list[dict],
-    batch_size: int = 100,
+    batch_size: int = 96,
     namespace: str = "",
 ) -> None:
-    """벡터 + 메타데이터를 Pinecone에 업로드한다."""
+    """텍스트 레코드를 Pinecone에 업로드한다. (서버사이드 임베딩)"""
     for i in range(0, len(ids), batch_size):
-        batch = list(zip(
-            ids[i:i + batch_size],
-            vectors[i:i + batch_size],
-            metadata_list[i:i + batch_size],
-        ))
-        kwargs = {"vectors": batch}
-        if namespace:
-            kwargs["namespace"] = namespace
-        index.upsert(**kwargs)
+        records = []
+        for j in range(i, min(i + batch_size, len(ids))):
+            record = {"_id": ids[j], INTEGRATED_TEXT_FIELD: texts[j]}
+            record.update(metadata_list[j])
+            records.append(record)
+        index.upsert_records(namespace=namespace or "__default__", records=records)
+
+
+def search_records(
+    index: Any,
+    query_text: str,
+    top_k: int = 5,
+    filter: dict | None = None,
+    namespace: str = "",
+) -> list[dict]:
+    """텍스트 쿼리로 Pinecone 검색한다. (서버사이드 임베딩)
+
+    Returns:
+        [{"id": str, "score": float, "metadata": dict}, ...]
+    """
+    query: dict[str, Any] = {
+        "inputs": {"text": query_text},
+        "top_k": top_k,
+    }
+    if filter:
+        query["filter"] = filter
+    results = index.search_records(
+        namespace=namespace or "__default__",
+        query=query,
+    )
+
+    # 기존 search_pinecone()와 동일한 반환 형식으로 정규화
+    # SDK 반환 형식: {"result": {"hits": [...]}} 또는 직접 리스트
+    if hasattr(results, "result"):
+        hits = results.result.hits if hasattr(results.result, "hits") else []
+    elif isinstance(results, dict):
+        hits = results.get("result", {}).get("hits", results.get("records", []))
+    else:
+        hits = []
+    normalized = []
+    for hit in hits:
+        if isinstance(hit, dict):
+            hit_id = hit.get("_id", "")
+            hit_score = hit.get("_score", 0)
+            hit_meta = {k: v for k, v in hit.items() if k not in ("_id", "_score")}
+        else:
+            hit_id = getattr(hit, "_id", "") or getattr(hit, "id", "")
+            hit_score = getattr(hit, "_score", 0) or getattr(hit, "score", 0)
+            hit_dict = hit if isinstance(hit, dict) else (hit.to_dict() if hasattr(hit, "to_dict") else vars(hit))
+            hit_meta = {k: v for k, v in hit_dict.items() if k not in ("_id", "_score")}
+        normalized.append({"id": hit_id, "score": hit_score, "metadata": hit_meta})
+    return normalized
 
 
 def chunk_text(text: str, max_chars: int = 1000, overlap: int = 200) -> list[str]:
@@ -146,11 +175,14 @@ def get_or_create_index(pc, index_name: str = PINECONE_INDEX_NAME):
     """이미 초기화된 Pinecone 클라이언트로 인덱스를 가져오거나 생성한다."""
     if isinstance(pc, Pinecone):
         if index_name not in [idx.name for idx in pc.list_indexes()]:
-            pc.create_index(
+            pc.create_index_for_model(
                 name=index_name,
-                dimension=EMBED_DIM,
-                metric="cosine",
-                spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+                cloud="aws",
+                region="us-east-1",
+                embed={
+                    "model": INTEGRATED_MODEL,
+                    "field_map": {"text": INTEGRATED_TEXT_FIELD},
+                },
             )
         return pc.Index(index_name)
     # pc가 이미 Index 객체인 경우 그대로 반환
@@ -158,7 +190,7 @@ def get_or_create_index(pc, index_name: str = PINECONE_INDEX_NAME):
 
 
 def list_all_doc_ids(pinecone_index, namespace: str = "") -> list[dict]:
-    """Pinecone에서 doc_ prefix로 전체 벡터를 조회하여 URL별로 그룹핑한다."""
+    """Pinecone에서 doc_ prefix로 전체 레코드를 조회하여 URL별로 그룹핑한다."""
     try:
         all_ids: list[str] = []
         listed = pinecone_index.list(prefix="doc_", namespace=namespace)
@@ -178,8 +210,15 @@ def list_all_doc_ids(pinecone_index, namespace: str = "") -> list[dict]:
         for i in range(0, len(all_ids), 100):
             batch_ids = all_ids[i:i + 100]
             fetched = pinecone_index.fetch(ids=batch_ids, namespace=namespace)
-            for vid, vec_data in fetched.get("vectors", {}).items():
-                meta = vec_data.get("metadata", {})
+            # Integrated Index fetch 반환 형식 정규화
+            vectors = fetched.get("vectors", {}) if isinstance(fetched, dict) else {}
+            if not vectors and hasattr(fetched, "vectors"):
+                vectors = fetched.vectors or {}
+            for vid, vec_data in vectors.items():
+                if isinstance(vec_data, dict):
+                    meta = vec_data.get("metadata", {})
+                else:
+                    meta = getattr(vec_data, "metadata", {}) or {}
                 url = meta.get("url", "")
                 prefix = "_".join(vid.split("_")[:3]) + "_"  # doc_{hash}_
                 if url not in url_groups:
@@ -196,38 +235,6 @@ def list_all_doc_ids(pinecone_index, namespace: str = "") -> list[dict]:
     except Exception as e:
         print(f"[warn] 문서 목록 조회 실패: {e}")
         return []
-
-
-def search_pinecone(
-    index: Any,
-    query_vector: list[float],
-    top_k: int = 5,
-    filter: dict | None = None,
-) -> list[dict]:
-    """Pinecone에서 유사 벡터를 검색한다.
-
-    Args:
-        filter: Pinecone 메타데이터 필터 (예: {"source": {"$eq": "admin"}}).
-
-    Returns:
-        [{"id": str, "score": float, "metadata": dict}, ...]
-    """
-    kwargs: dict[str, Any] = {
-        "vector": query_vector,
-        "top_k": top_k,
-        "include_metadata": True,
-    }
-    if filter:
-        kwargs["filter"] = filter
-    results = index.query(**kwargs)
-    return [
-        {
-            "id": match["id"],
-            "score": match["score"],
-            "metadata": match.get("metadata", {}),
-        }
-        for match in results["matches"]
-    ]
 
 
 def rerank_results(

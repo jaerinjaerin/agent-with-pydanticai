@@ -1,7 +1,7 @@
 """
 VectorRAG 인덱스 빌드 스크립트.
 
-JSON 데이터 → 청킹 → 임베딩 + Pinecone 업로드.
+JSON 데이터 → 청킹 → Pinecone Integrated Index 업로드 (서버사이드 임베딩).
 
 사용법:
     python src/graph/build_index.py
@@ -19,10 +19,8 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from graph.embedding_index import (
-    get_embed_model,
-    embed_documents,
     init_pinecone,
-    upsert_vectors,
+    upsert_records,
     chunk_text,
     make_doc_id,
 )
@@ -76,9 +74,8 @@ def load_documents() -> list[dict]:
 
 
 def build_embeddings(documents: list[dict]):
-    """문서를 청킹하고 임베딩을 생성하여 Pinecone에 업로드한다."""
-    print(f"\n[1/2] 청킹 + 임베딩 생성 중... ({len(documents)}개 문서)")
-    model = get_embed_model()
+    """문서를 청킹하고 Pinecone Integrated Index에 업로드한다."""
+    print(f"\n[1/2] 청킹 + Pinecone 업로드 중... ({len(documents)}개 문서)")
 
     # Pinecone 초기화 + 기존 벡터 전체 삭제
     print("  Pinecone 인덱스 초기화 중...")
@@ -115,20 +112,16 @@ def build_embeddings(documents: list[dict]):
 
     print(f"  총 {len(all_chunks)}개 청크 생성 (문서 {len(documents)}개)")
 
-    # 임베딩
-    vectors = embed_documents(model, all_chunks)
-    print(f"  임베딩 완료: {len(vectors)}개 벡터 (차원: {len(vectors[0])})")
-
-    # Pinecone 업로드
-    print(f"  Pinecone에 {len(all_ids)}개 벡터 업로드 중...")
-    upsert_vectors(index, all_ids, vectors, all_metadata)
+    # Pinecone 업로드 (서버사이드 임베딩)
+    print(f"  Pinecone에 {len(all_ids)}개 레코드 업로드 중...")
+    upsert_records(index, all_ids, all_chunks, all_metadata)
     print("  업로드 완료!")
 
-    return model, index
+    return index
 
 
-def build_image_embeddings(documents: list[dict], embed_model, pinecone_index):
-    """이미지 설명을 생성하고 임베딩 → Pinecone에 업로드한다."""
+def build_image_embeddings(documents: list[dict], pinecone_index):
+    """이미지 설명을 생성하고 Pinecone에 업로드한다."""
     image_paths = collect_all_image_paths(documents)
     if not image_paths:
         print("\n[2/2] 이미지 없음 — 건너뜀")
@@ -137,7 +130,7 @@ def build_image_embeddings(documents: list[dict], embed_model, pinecone_index):
     print(f"\n[2/2] 이미지 설명 생성 중... ({len(image_paths)}장)")
     descriptions = describe_images_batch(image_paths)
 
-    # 이미지 설명 임베딩 + Pinecone 업로드
+    # 이미지 설명 Pinecone 업로드
     total_uploaded = 0
     for doc in documents:
         doc_images = []
@@ -151,7 +144,6 @@ def build_image_embeddings(documents: list[dict], embed_model, pinecone_index):
             title=doc.get("title", ""),
             url=doc.get("url", ""),
             source=doc.get("source", ""),
-            embed_model=embed_model,
             pinecone_index=pinecone_index,
             descriptions=descriptions,
         )
@@ -172,11 +164,11 @@ def main():
         if count > 0:
             print(f"  - {source}: {count}건")
 
-    # 1. 텍스트 청킹 + 임베딩 + Pinecone
-    embed_model, pinecone_index = build_embeddings(documents)
+    # 1. 텍스트 청킹 + Pinecone 업로드
+    pinecone_index = build_embeddings(documents)
 
-    # 2. 이미지 설명 생성 + 임베딩 + Pinecone
-    build_image_embeddings(documents, embed_model, pinecone_index)
+    # 2. 이미지 설명 생성 + Pinecone 업로드
+    build_image_embeddings(documents, pinecone_index)
 
     print("\n" + "=" * 60)
     print("빌드 완료!")

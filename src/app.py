@@ -73,6 +73,8 @@ _SCROLL_TRIGGER_JS = """<script>
 })();
 </script>"""
 
+_STREAMING_MARKER = '<div id="eluo-streaming" style="display:none"></div>'
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATIC = Path(__file__).resolve().parent / "ui" / "static"
 _AVATAR_BOT = str(_STATIC / "avatar_bot.svg")
@@ -156,8 +158,21 @@ if "scroll_to_bottom" not in st.session_state:
     st.session_state.scroll_to_bottom = False
 if "model_choice" not in st.session_state:
     st.session_state.model_choice = list(MODEL_OPTIONS.keys())[0]
+if "is_streaming" not in st.session_state:
+    st.session_state.is_streaming = False
 
 def _run_chat():
+    # 이전 run이 스트리밍 중 중단되었는지 확인
+    if st.session_state.is_streaming:
+        st.session_state.is_streaming = False
+        if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": "Claude의 응답이 중단되었습니다.",
+                "related_topics": [],
+                "timestamp": _format_timestamp(),
+            })
+
     # 버튼 클릭 후 rerun 시 스크롤 트리거
     if st.session_state.scroll_to_bottom:
         st.session_state.scroll_to_bottom = False
@@ -243,6 +258,10 @@ def _run_chat():
     _provider, _model_id = MODEL_OPTIONS[st.session_state.model_choice]
     selected_model = _build_model(_provider, _model_id)
 
+    # 숨겨진 정지 트리거 — 항상 렌더링하여 위젯 트리 일관성 유지
+    # JS(input_layout.js)가 이 버튼을 찾아 숨기고, 정지 버튼 클릭 시 프로그래밍 방식으로 클릭
+    st.button("중지", key="_eluo_stop_trigger")
+
     # pending_input이 있으면 자동 실행
     _pending = st.session_state.pending_input
     st.session_state.pending_input = None
@@ -276,6 +295,9 @@ def _run_chat():
 
         # 하단 스크롤 트리거 (components.html → iframe 내 JS 실행)
         components.html(_SCROLL_TRIGGER_JS, height=0)
+
+        st.session_state.is_streaming = True
+        st.markdown(_STREAMING_MARKER, unsafe_allow_html=True)
 
         related_topics = []
         with st.chat_message("assistant", avatar=_AVATAR_BOT):
@@ -357,12 +379,16 @@ animation:pulse 1.4s ease-in-out infinite,bounce 1.4s ease-in-out infinite}
                     _stream(prompt, faq_db, st.session_state.pydantic_history)
                 )
                 st.session_state.pydantic_history = all_messages
+            except (st.runtime.scriptrunner.StopException, KeyboardInterrupt):
+                raise
             except Exception:
                 try:
                     answer, all_messages = run_async(
                         _stream(prompt, faq_db, None)
                     )
                     st.session_state.pydantic_history = all_messages
+                except (st.runtime.scriptrunner.StopException, KeyboardInterrupt):
+                    raise
                 except Exception as e:
                     st.session_state.pydantic_history = []
                     err_str = str(e)
@@ -416,6 +442,7 @@ animation:pulse 1.4s ease-in-out infinite,bounce 1.4s ease-in-out infinite}
             "related_topics": related_topics if related_topics else [],
             "timestamp": bot_ts,
         })
+        st.session_state.is_streaming = False
         st.rerun()
 
 

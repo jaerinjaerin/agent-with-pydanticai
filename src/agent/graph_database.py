@@ -22,10 +22,8 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from graph.embedding_index import (
-    get_embed_model,
-    embed_query,
     init_pinecone,
-    search_pinecone,
+    search_records,
     rerank_results,
     PINECONE_INDEX_NAME,
 )
@@ -43,13 +41,12 @@ class GraphRAGDatabase:
     items: list[dict] = field(default_factory=list)
     pinecone_client: Any = None  # Pinecone 클라이언트 (리랭킹용)
     pinecone_index: Any = None
-    embed_model: Any = None  # SentenceTransformer
     _search_cache: OrderedDict = field(default_factory=OrderedDict, repr=False)
     _cache_max: int = field(default=50, repr=False)
     _cache_ttl: float = field(default=300.0, repr=False)  # 5분
 
     def load(self, paths: list[Path] | None = None) -> "GraphRAGDatabase":
-        """JSON 데이터, 임베딩 모델, Pinecone 인덱스를 로드한다."""
+        """JSON 데이터, Pinecone 인덱스를 로드한다."""
 
         # ── 1. JSON 데이터 로드 ──
         if paths is None:
@@ -92,11 +89,7 @@ class GraphRAGDatabase:
         if not self.items:
             print("[warn] 로드된 데이터가 비어있습니다.")
 
-        # ── 2. 임베딩 모델 로드 ──
-        print("[VectorRAG] 임베딩 모델 로드 중...")
-        self.embed_model = get_embed_model()
-
-        # ── 3. Pinecone 인덱스 연결 (실패 시 None) ──
+        # ── 2. Pinecone 인덱스 연결 (실패 시 None) ──
         api_key = os.environ.get("PINECONE_API_KEY", "")
         if api_key:
             try:
@@ -150,7 +143,6 @@ class GraphRAGDatabase:
         top_k: int = 5,
         min_score: float = 0.2,
         source: str = "",
-        query_vector: list[float] | None = None,
     ) -> list[dict]:
         """Pinecone 벡터 유사도 검색. 같은 URL의 청크는 최고 점수만 유지.
 
@@ -158,18 +150,15 @@ class GraphRAGDatabase:
             min_score: 최소 유사도 임계값 (이하 결과 제거).
             source: 소스 필터 ("eluocnc", "admin", 또는 "" 전체).
         """
-        if self.pinecone_index is None or self.embed_model is None:
+        if self.pinecone_index is None:
             return []
-
-        if query_vector is None:
-            query_vector = embed_query(self.embed_model, query)
 
         # 소스 필터 구성
         pc_filter = {"source": {"$eq": source}} if source else None
 
         # 청크 중복 제거를 위해 더 많이 요청
-        raw_results = search_pinecone(
-            self.pinecone_index, query_vector, top_k=top_k * 8, filter=pc_filter,
+        raw_results = search_records(
+            self.pinecone_index, query, top_k=top_k * 8, filter=pc_filter,
         )
 
         # 같은 URL은 최고 점수 청크만 유지

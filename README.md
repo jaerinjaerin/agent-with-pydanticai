@@ -152,7 +152,7 @@ PydanticAI 에이전트 + 벡터 검색(Pinecone) + 지식그래프(NetworkX)를
 │   │   ├── eluocnc_scraper.py      # 회사 웹사이트 크롤러
 │   │   └── file_extractor.py       # 파일 추출 (텍스트/표/이미지, PDF/DOCX/XLSX/PPTX/MD/TXT/HWP)
 │   ├── storage/
-│   │   └── r2_storage.py           # AWS S3 이미지 업로드/삭제
+│   │   └── s3_storage.py           # AWS S3 이미지 업로드/삭제
 │   ├── pages/
 │   │   └── admin.py                # 문서 관리 어드민 (파일 업로드 → 미디어 파이프라인)
 │   └── ui/

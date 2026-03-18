@@ -21,7 +21,7 @@ import streamlit as st
 # src 디렉토리를 path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from graph.embedding_index import get_embed_model, init_pinecone
+from graph.embedding_index import init_pinecone
 from graph.ingest import ingest_document, ingest_document_with_media, delete_document
 from graph.data_store import (
     load_items, add_item, update_item, delete_item, find_item_by_url,
@@ -85,19 +85,18 @@ except FileNotFoundError:
 
 @st.cache_resource
 def load_resources():
-    """임베딩 모델 + Pinecone 인덱스를 로드한다."""
+    """Pinecone 인덱스를 로드한다."""
     api_key = os.environ.get("PINECONE_API_KEY", "")
     if not api_key:
-        return None, None
-    embed_model = get_embed_model()
+        return None
     pc_index = init_pinecone(api_key)
-    return embed_model, pc_index
+    return pc_index
 
 
 try:
-    embed_model, pinecone_index = load_resources()
+    pinecone_index = load_resources()
 except Exception as e:
-    embed_model, pinecone_index = None, None
+    pinecone_index = None
     err_msg = str(e)
     if "401" in err_msg or "Unauthorized" in err_msg or "Invalid API Key" in err_msg:
         st.error("Pinecone API 키가 유효하지 않습니다. `.env` 파일의 PINECONE_API_KEY를 확인해주세요.")
@@ -259,7 +258,7 @@ def show_doc_detail_dialog():
                     result = ingest_document(
                         title=edit_title, content=edit_content,
                         source=edit_source, url=url,
-                        embed_model=embed_model, pinecone_index=pinecone_index,
+                        pinecone_index=pinecone_index,
                     )
                     step2.write(f"✅ {result['chunks']}개 청크 재업로드 완료")
                 else:
@@ -399,7 +398,7 @@ if nav == "📋 문서 관리":
                             s3_deleted = 0
                             if doc.get("attachments"):
                                 try:
-                                    from storage.r2_storage import is_configured, delete_images
+                                    from storage.s3_storage import is_configured, delete_images
                                     import hashlib
                                     if is_configured():
                                         url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
@@ -561,7 +560,7 @@ elif nav == "📤 새 문서 등록":
 
                 result = ingest_document_with_media(
                     title=title, content=content, source=source, url=url,
-                    embed_model=embed_model, pinecone_index=pinecone_index,
+                    pinecone_index=pinecone_index,
                     images=extracted_images,
                     progress_callback=_on_progress,
                 )
@@ -604,7 +603,7 @@ elif nav == "📤 새 문서 등록":
                     steps.write("⏳ Step 3: 임베딩 & Pinecone 업로드 중...")
                     result = ingest_document(
                         title=title, content=content, source=source, url=url,
-                        embed_model=embed_model, pinecone_index=pinecone_index,
+                        pinecone_index=pinecone_index,
                     )
                     steps.write(f"✅ Step 3: {result['chunks']}개 청크 업로드 완료")
                     summary = f"{result['chunks']}개 청크"

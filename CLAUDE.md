@@ -60,9 +60,9 @@ python -c "import sys; sys.path.insert(0,'src'); from agent.faq_agent import ask
 
 - **엘루오씨앤씨 크롤러** (`src/scraper/eluocnc_scraper.py`): BFS 링크 탐색 + AJAX 엔드포인트(`ajax.works_list.asp`, `ajax.idea_list.asp`)로 프로젝트/블로그 URL 수집 → 페이지 스크래핑 + PDF 텍스트 추출 → `data/eluocnc.json` 저장.
 - **파일 추출기** (`src/scraper/file_extractor.py`): PDF/DOCX/XLSX/PPTX/MD/TXT/HWP 파일에서 텍스트, 표(마크다운 테이블), 임베디드 이미지를 추출. `extract_text()`(텍스트 전용, 하위호환)와 `extract_content()`(`ExtractionResult` 반환 — 텍스트+이미지) 두 가지 인터페이스 제공.
-- **S3 이미지 저장** (`src/storage/r2_storage.py`): AWS S3에 이미지 업로드/삭제. `boto3` 사용. 환경변수 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME`, `AWS_S3_REGION` 필요. `AWS_S3_PUBLIC_URL`로 CloudFront 커스텀 도메인 지정 가능. 미설정 시 이미지 처리를 건너뛰고 텍스트만 인제스트.
+- **S3 이미지 저장** (`src/storage/s3_storage.py`): AWS S3에 이미지 업로드/삭제. `boto3` 사용. 환경변수 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME`, `AWS_S3_REGION` 필요. `AWS_S3_PUBLIC_URL`로 CloudFront 커스텀 도메인 지정 가능. 미설정 시 이미지 처리를 건너뛰고 텍스트만 인제스트.
 - **이미지 설명 생성** (`src/graph/image_describer.py`): Claude Vision API로 이미지 분석 → 한국어 텍스트 설명 생성. `describe_image()`(파일 경로), `describe_image_bytes()`(바이트 데이터) 두 가지 입력 방식 지원. 설명은 `data/image_descriptions.json`에 캐시.
-- **임베딩 모듈** (`src/graph/embedding_index.py`): `sentence-transformers`(`paraphrase-multilingual-MiniLM-L12-v2`)로 384차원 임베딩 생성. Pinecone 벡터 DB에 저장/검색.
+- **임베딩 모듈** (`src/graph/embedding_index.py`): Pinecone Integrated Index (`multilingual-e5-large`)로 서버사이드 임베딩 생성/검색. 텍스트만 전송하면 Pinecone이 임베딩 처리.
 - **그래프 빌더** (`src/graph/graph_builder.py`): Claude API로 문서에서 엔티티/관계 추출. Pydantic `DocumentGraphExtraction` 스키마로 구조화. 임베딩 유사도 기반 엔티티 중복 해결. NetworkX 그래프 구축.
 - **빌드 스크립트** (`src/graph/build_index.py`): JSON 데이터 → 임베딩 + Pinecone 업로드 + 엔티티/관계 추출 + 지식그래프 구축. 최초 1회 실행.
 - **인제스트 파이프라인** (`src/graph/ingest.py`): 단건 문서 인제스트. `ingest_document()`(텍스트 전용), `ingest_document_with_media()`(텍스트+이미지 — S3 업로드 → Vision 설명 생성 → 벡터화 통합 파이프라인). `ingest_images()`로 이미지 설명을 별도 벡터로 Pinecone에 저장 (metadata.image_path에 S3 URL).
@@ -79,7 +79,7 @@ python -c "import sys; sys.path.insert(0,'src'); from agent.faq_agent import ask
 - 도구 사용 시 `message_history`가 400 BadRequestError를 유발할 수 있음 (tool response 메시지 누락) — Streamlit UI에서 폴백 재시도로 처리
 - PydanticAI에서 temperature 등 모델 파라미터 조정 불가
 - Claude API 비용: 엔티티 추출 시 문서당 1회 API 호출. 문서 수에 비례
-- sentence-transformers 모델이 ~140MB RAM 차지. 서버에서 상시 로드 필요
+- Pinecone Integrated Index (`eluocnc-faq-v2`)는 `multilingual-e5-large` 모델로 서버사이드 임베딩 사용. 로컬 임베딩 모델 불필요
 - Pinecone 무료 티어: Starter 플랜에서 1개 인덱스, 100K 벡터까지 무료
 - Pinecone 검색은 인터넷 연결 필요. 연결 실패 시 벡터 검색 비활성화 (그래프 검색만 동작)
 - AWS S3 미설정 시 파일 업로드의 이미지 추출/저장이 건너뛰어짐 (텍스트/표만 인제스트)

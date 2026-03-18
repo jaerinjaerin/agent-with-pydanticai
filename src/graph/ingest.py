@@ -2,7 +2,7 @@
 단건 문서 인제스트 파이프라인.
 
 어드민 UI에서 문서를 첨부/제출하면 이 모듈이 호출되어
-해당 문서만 청킹 → 임베딩 → Pinecone upsert를 수행한다.
+해당 문서만 청킹 → Pinecone upsert를 수행한다.
 그래프 업데이트도 포함.
 """
 
@@ -14,9 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from graph.embedding_index import (
     chunk_text,
     delete_doc_vectors,
-    embed_documents,
     make_doc_id,
-    upsert_vectors,
+    upsert_records,
 )
 from graph.image_describer import DESCRIPTIONS_PATH
 
@@ -39,12 +38,11 @@ def ingest_images(
     title: str,
     url: str,
     source: str,
-    embed_model,
     pinecone_index,
     descriptions: dict[str, str] | None = None,
     namespace: str = "",
 ) -> int:
-    """이미지 설명을 임베딩하여 Pinecone에 업로드한다.
+    """이미지 설명을 Pinecone에 업로드한다. (서버사이드 임베딩)
 
     Returns:
         업로드된 이미지 청크 수.
@@ -84,8 +82,7 @@ def ingest_images(
     if not ids:
         return 0
 
-    vectors = embed_documents(embed_model, texts)
-    upsert_vectors(pinecone_index, ids, vectors, metadata_list, namespace=namespace)
+    upsert_records(pinecone_index, ids, texts, metadata_list, namespace=namespace)
     return len(ids)
 
 
@@ -94,11 +91,10 @@ def ingest_document(
     content: str,
     source: str,
     url: str,
-    embed_model,
     pinecone_index,
     namespace: str = "",
 ) -> dict:
-    """단일 문서를 청킹 → 임베딩 → Pinecone에 업로드한다.
+    """단일 문서를 청킹 → Pinecone에 업로드한다. (서버사이드 임베딩)
 
     기존에 같은 URL의 문서가 있으면 삭제 후 재업로드.
 
@@ -126,11 +122,8 @@ def ingest_document(
         for i, chunk in enumerate(chunks)
     ]
 
-    # 4) 임베딩
-    vectors = embed_documents(embed_model, chunks)
-
-    # 5) Pinecone upsert
-    upsert_vectors(pinecone_index, ids, vectors, metadata_list, namespace=namespace)
+    # 4) Pinecone upsert (서버사이드 임베딩)
+    upsert_records(pinecone_index, ids, chunks, metadata_list, namespace=namespace)
 
     return {"chunks": len(chunks), "deleted": deleted}
 
@@ -140,7 +133,6 @@ def ingest_document_with_media(
     content: str,
     source: str,
     url: str,
-    embed_model,
     pinecone_index,
     images: list | None = None,
     namespace: str = "",
@@ -164,7 +156,7 @@ def ingest_document_with_media(
 
     # 1. 이미지 처리 (S3 업로드 + 설명 생성 + 벡터화)
     if images:
-        from storage.r2_storage import is_configured as s3_configured, upload_image
+        from storage.s3_storage import is_configured as s3_configured, upload_image
         from graph.image_describer import describe_image_bytes
 
         if not s3_configured():
@@ -223,7 +215,6 @@ def ingest_document_with_media(
                     title=title,
                     url=url,
                     source=source,
-                    embed_model=embed_model,
                     pinecone_index=pinecone_index,
                     descriptions=descriptions,
                     namespace=namespace,
@@ -237,7 +228,6 @@ def ingest_document_with_media(
         content=content,
         source=source,
         url=url,
-        embed_model=embed_model,
         pinecone_index=pinecone_index,
         namespace=namespace,
     )
@@ -254,5 +244,3 @@ def ingest_document_with_media(
 def delete_document(url: str, pinecone_index, namespace: str = "") -> int:
     """문서를 Pinecone에서 삭제한다. 삭제된 벡터 수를 반환."""
     return delete_doc_vectors(pinecone_index, url, namespace=namespace)
-
-
