@@ -38,16 +38,10 @@ class DocumentGraphExtraction(BaseModel):
 
 # ── 엔티티/관계 추출 에이전트 ──
 
-def _embed_texts_via_pinecone(texts: list[str]) -> list[list[float]]:
-    """Pinecone Inference API로 텍스트 임베딩."""
-    from pinecone import Pinecone
-    pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY", ""))
-    response = pc.inference.embed(
-        model="multilingual-e5-large",
-        inputs=texts,
-        parameters={"input_type": "passage"},
-    )
-    return [e.values for e in response.data]
+def _embed_texts_via_gemini(texts: list[str]) -> list[list[float]]:
+    """Gemini API로 텍스트 임베딩."""
+    from graph.embeddings import embed_texts
+    return embed_texts(texts, task_type="RETRIEVAL_DOCUMENT")
 
 
 extraction_agent = Agent(
@@ -100,7 +94,7 @@ def resolve_duplicate_entities(
     if len(names) <= 1:
         return {n: n for n in names}
 
-    vectors = _embed_texts_via_pinecone(names)
+    vectors = _embed_texts_via_gemini(names)
 
     from sklearn.metrics.pairwise import cosine_similarity as cos_sim
     import numpy as np

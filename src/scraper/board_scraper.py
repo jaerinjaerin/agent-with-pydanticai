@@ -386,13 +386,14 @@ def _process_images(
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
     try:
-        from storage.s3_storage import is_configured as s3_configured, upload_image
+        from storage.supabase_storage import upload_image
+        from storage.supabase_client import is_configured as supabase_configured
     except ImportError:
-        print("    [warn] s3_storage 모듈을 로드할 수 없습니다.")
+        print("    [warn] supabase_storage 모듈을 로드할 수 없습니다.")
         return [], []
 
-    if not s3_configured():
-        print("    [info] S3 미설정 — 이미지 업로드 건너뜀")
+    if not supabase_configured():
+        print("    [info] Supabase 미설정 — 이미지 업로드 건너뜀")
         return [], []
 
     url_hash = hashlib.md5(post_data["url"].encode("utf-8")).hexdigest()[:12]
@@ -429,7 +430,7 @@ def _generate_descriptions_and_vectorize(
     image_urls: list[str],
     image_bytes_map: dict[str, tuple[bytes, str]],
 ) -> None:
-    """이미지 설명을 생성하고 벡터화하여 Pinecone에 업로드한다."""
+    """이미지 설명을 생성하고 벡터화하여 Supabase에 업로드한다."""
     if not image_urls:
         return
 
@@ -438,7 +439,7 @@ def _generate_descriptions_and_vectorize(
 
     try:
         from graph.image_describer import describe_image_bytes
-        from graph.embedding_index import init_pinecone
+        from graph.supabase_vector import init_db
         from graph.ingest import ingest_images
     except ImportError as e:
         print(f"    [warn] 벡터화 모듈 로드 실패: {e}")
@@ -461,13 +462,13 @@ def _generate_descriptions_and_vectorize(
 
     # 벡터화
     try:
-        pinecone_index = init_pinecone()
+        supabase_client = init_db()
         count = ingest_images(
             image_paths=image_urls,
             title=post_data.get("title", ""),
             url=post_data.get("url", ""),
-            source="FAQ",
-            pinecone_index=pinecone_index,
+            source="board",
+            supabase_client=supabase_client,
             descriptions=descriptions,
         )
         print(f"    [vector] {count}개 이미지 벡터 업로드")
@@ -500,7 +501,7 @@ def scrape_board(board_name: str, board_url: str, page: Page) -> list[dict]:
             continue
 
         post["category"] = board_name
-        post["source"] = "FAQ"
+        post["source"] = "board"
         post["scraped_at"] = datetime.now(timezone.utc).isoformat()
 
         # 3. 첨부파일 다운로드 + 텍스트 추출

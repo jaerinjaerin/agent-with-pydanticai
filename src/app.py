@@ -20,11 +20,18 @@ import streamlit.components.v1 as components
 if os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY"):
     os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
 
+# Streamlit Cloud secrets → 환경변수 주입
+try:
+    for key in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+        if key in st.secrets and key not in os.environ:
+            os.environ[key] = st.secrets[key]
+except FileNotFoundError:
+    pass
+
 # src 디렉토리를 path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.models.google import GoogleModel
 
 from agent.faq_agent import GraphRAGDatabase, faq_agent, get_graph_db
 
@@ -82,16 +89,29 @@ _AVATAR_USER = str(_STATIC / "avatar_user.svg")
 
 st.set_page_config(page_title="Ask Eluo", page_icon="💬", layout="wide")
 
+# ── OG 메타 태그 (URL 공유 시 미리보기 카드) ──
+_OG_IMAGE = "https://aichatbot-985281838948-us-east-1-an.s3.us-east-1.amazonaws.com/static/og_image.png"
+st.markdown(
+    f"""
+    <meta property="og:title" content="Ask Eluo — 엘루오씨앤씨 AI 챗봇" />
+    <meta property="og:description" content="엘루오씨앤씨 사내 지식 검색 AI 챗봇. 회사 정보, 프로젝트, 블로그 등을 질문해 보세요." />
+    <meta property="og:image" content="{_OG_IMAGE}" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Ask Eluo — 엘루오씨앤씨 AI 챗봇" />
+    <meta name="twitter:description" content="엘루오씨앤씨 사내 지식 검색 AI 챗봇. 회사 정보, 프로젝트, 블로그 등을 질문해 보세요." />
+    <meta name="twitter:image" content="{_OG_IMAGE}" />
+    """,
+    unsafe_allow_html=True,
+)
+
 # ── 모델 선택 ──
 MODEL_OPTIONS = {
-    "Gemini 2.5 Flash": ("google", "gemini-2.5-flash"),
-    "Claude Sonnet 4": ("anthropic", "claude-sonnet-4-6"),
     "Claude Haiku 4.5": ("anthropic", "claude-haiku-4-5"),
+    "Claude Sonnet 4": ("anthropic", "claude-sonnet-4-6"),
 }
 
 def _build_model(provider: str, model_id: str):
-    if provider == "google":
-        return GoogleModel(model_id)
     return AnthropicModel(model_id)
 
 # ── CSS / JS 로드 ──
@@ -125,9 +145,9 @@ def load_faq_db() -> GraphRAGDatabase:
 # DB 로드
 try:
     faq_db = load_faq_db()
-    pinecone_ok = faq_db.pinecone_index is not None
-    badge_class = "connected" if pinecone_ok else "disconnected"
-    badge_text = "Pinecone" if pinecone_ok else "Pinecone 연결 안됨"
+    db_ok = faq_db.supabase_client is not None
+    badge_class = "connected" if db_ok else "disconnected"
+    badge_text = "Supabase" if db_ok else "Supabase 연결 안됨"
     st.markdown(f"""
     <div class="pinecone-badge {badge_class}">
         <span class="pinecone-dot"></span>
@@ -147,6 +167,61 @@ except Exception as e:
     st.error(f"데이터 로드 실패: {e}")
     st.stop()
 
+# ── 대화 지속성 ──
+def _init_conversation():
+    """Supabase에서 대화를 복원하거나 새로 생성한다."""
+    try:
+        from storage.supabase_client import is_configured
+        if not is_configured():
+            return
+        from storage.supabase_conversations import (
+            get_or_create_conversation, load_messages,
+        )
+        import uuid
+
+        if "session_id" not in st.session_state:
+            st.session_state.session_id = str(uuid.uuid4())
+
+        conv = get_or_create_conversation(st.session_state.session_id)
+        st.session_state.conversation_id = conv.get("id", "")
+
+        # 이전 대화 복원
+        if not st.session_state.get("messages"):
+            db_messages = load_messages(st.session_state.conversation_id)
+            if db_messages:
+                restored = []
+                for m in db_messages:
+                    restored.append({
+                        "role": m["role"],
+                        "content": m["content"],
+                        "related_topics": m.get("related_topics", []),
+                        "timestamp": m.get("metadata", {}).get("timestamp", ""),
+                    })
+                st.session_state.messages = restored
+    except Exception as e:
+        print(f"[warn] 대화 복원 실패: {e}")
+
+
+def _save_message(role: str, content: str, related_topics: list[str] = None, timestamp: str = ""):
+    """메시지를 Supabase에 저장한다."""
+    try:
+        from storage.supabase_client import is_configured
+        if not is_configured():
+            return
+        from storage.supabase_conversations import save_message
+        conv_id = st.session_state.get("conversation_id", "")
+        if conv_id:
+            save_message(
+                conversation_id=conv_id,
+                role=role,
+                content=content,
+                related_topics=related_topics,
+                metadata={"timestamp": timestamp},
+            )
+    except Exception as e:
+        print(f"[warn] 메시지 저장 실패: {e}")
+
+
 # 세션 상태 초기화
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -160,6 +235,9 @@ if "model_choice" not in st.session_state:
     st.session_state.model_choice = list(MODEL_OPTIONS.keys())[0]
 if "is_streaming" not in st.session_state:
     st.session_state.is_streaming = False
+
+# 대화 복원
+_init_conversation()
 
 def _run_chat():
     # 이전 run이 스트리밍 중 중단되었는지 확인
@@ -285,6 +363,7 @@ def _run_chat():
         </style>""", unsafe_allow_html=True)
         user_ts = _format_timestamp()
         st.session_state.messages.append({"role": "user", "content": prompt, "timestamp": user_ts})
+        _save_message("user", prompt, timestamp=user_ts)
         with st.chat_message("user", avatar=_AVATAR_USER):
             st.markdown('<span class="msg-marker-user" style="display:none"></span>', unsafe_allow_html=True)
             st.markdown(prompt)
@@ -442,6 +521,7 @@ animation:pulse 1.4s ease-in-out infinite,bounce 1.4s ease-in-out infinite}
             "related_topics": related_topics if related_topics else [],
             "timestamp": bot_ts,
         })
+        _save_message("assistant", answer, related_topics=related_topics or [], timestamp=bot_ts)
         st.session_state.is_streaming = False
         st.rerun()
 
@@ -451,6 +531,15 @@ try:
 except Exception as e:
     st.error(f"예기치 않은 오류가 발생했습니다: {e}")
     if st.button("대화 초기화"):
+        try:
+            from storage.supabase_conversations import delete_conversation
+            conv_id = st.session_state.get("conversation_id", "")
+            if conv_id:
+                delete_conversation(conv_id)
+        except Exception:
+            pass
         st.session_state.messages = []
         st.session_state.pydantic_history = []
+        st.session_state.pop("conversation_id", None)
+        st.session_state.pop("session_id", None)
         st.rerun()

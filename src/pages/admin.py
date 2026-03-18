@@ -1,7 +1,7 @@
 """
 문서 관리 어드민 페이지.
 
-문서 등록/수정/삭제 → JSON 저장 + Pinecone 벡터 인덱스 + 지식그래프 관리.
+문서 등록/수정/삭제 → Supabase DB + pgvector 벡터 인덱스 관리.
 """
 
 import asyncio
@@ -10,6 +10,7 @@ import re
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,11 +22,15 @@ import streamlit as st
 # src 디렉토리를 path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from graph.embedding_index import init_pinecone
+from graph.supabase_vector import init_db
 from graph.ingest import ingest_document, ingest_document_with_media, delete_document
-from graph.data_store import (
-    load_items, add_item, update_item, delete_item, find_item_by_url,
+from storage.supabase_documents import (
+    list_documents as db_list_documents,
+    get_document as db_get_document,
+    upsert_document as db_upsert_document,
+    delete_document as db_delete_document,
 )
+from storage.supabase_client import is_configured as supabase_configured
 
 st.set_page_config(page_title="RAG 문서 관리", page_icon="📄", layout="wide")
 
@@ -59,11 +64,6 @@ st.title("📄 RAG 문서 관리")
 st.caption("AI 챗봇이 참조할 문서를 관리하세요")
 
 # ── 상수 ──
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-ADMIN_DATA_PATH = DATA_DIR / "admin_documents.json"
-ELUOCNC_DATA_PATH = DATA_DIR / "eluocnc.json"
-BOARD_DATA_PATH = DATA_DIR / "board_documents.json"
-
 ITEMS_PER_PAGE = 15
 
 SOURCE_LABELS = {
@@ -74,7 +74,7 @@ SOURCE_LABELS = {
 
 # ── Streamlit Cloud secrets → 환경변수 주입 ──
 try:
-    for key in ("PINECONE_API_KEY", "ANTHROPIC_API_KEY"):
+    for key in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
         if key in st.secrets and key not in os.environ:
             os.environ[key] = st.secrets[key]
 except FileNotFoundError:
@@ -85,55 +85,35 @@ except FileNotFoundError:
 
 @st.cache_resource
 def load_resources():
-    """Pinecone 인덱스를 로드한다."""
-    api_key = os.environ.get("PINECONE_API_KEY", "")
-    if not api_key:
+    """Supabase 클라이언트를 로드한다."""
+    if not supabase_configured():
         return None
-    pc_index = init_pinecone(api_key)
-    return pc_index
+    return init_db()
 
 
 try:
-    pinecone_index = load_resources()
+    supabase_client = load_resources()
 except Exception as e:
-    pinecone_index = None
+    supabase_client = None
     err_msg = str(e)
-    if "401" in err_msg or "Unauthorized" in err_msg or "Invalid API Key" in err_msg:
-        st.error("Pinecone API 키가 유효하지 않습니다. `.env` 파일의 PINECONE_API_KEY를 확인해주세요.")
-    else:
-        st.error(f"Pinecone 연결 실패: {err_msg[:200]}")
+    st.error(f"Supabase 연결 실패: {err_msg[:200]}")
 
-if pinecone_index is None:
-    st.warning("Pinecone에 연결되지 않았습니다. API 키를 확인해주세요. JSON 문서 관리만 가능합니다.")
-    _pinecone_ok = False
+if supabase_client is None:
+    st.warning("Supabase에 연결되지 않았습니다. 환경변수를 확인해주세요. 문서 관리만 가능합니다.")
+    _db_ok = False
 else:
-    _pinecone_ok = True
+    _db_ok = True
 
 
-# ── 전체 JSON 데이터 로드 헬퍼 ──
+# ── 문서 로드 헬퍼 ──
 
 def load_all_documents() -> list[dict]:
-    """모든 JSON 데이터 소스에서 문서를 로드한다."""
-    all_items = []
-    source_map = {
-        ADMIN_DATA_PATH: "admin",
-        ELUOCNC_DATA_PATH: "eluocnc",
-        BOARD_DATA_PATH: "board",
-    }
-    for path, default_source in source_map.items():
-        if not path.exists():
-            continue
-        try:
-            import json
-            with open(path, encoding="utf-8") as f:
-                items = json.load(f)
-            for item in items:
-                item.setdefault("source", default_source)
-                item["_data_path"] = str(path)
-            all_items.extend(items)
-        except Exception:
-            continue
-    return all_items
+    """Supabase에서 모든 문서를 로드한다."""
+    try:
+        return db_list_documents()
+    except Exception as e:
+        st.error(f"문서 로드 실패: {e}")
+        return []
 
 
 def generate_admin_url(title: str) -> str:
@@ -243,26 +223,28 @@ def show_doc_detail_dialog():
                 step2 = st.empty()
                 step3 = st.empty()
 
-                step1.write("⏳ JSON 업데이트 중...")
-                updated_fields = {
+                step1.write("⏳ DB 업데이트 중...")
+                updated_doc = {
+                    "url": url,
                     "title": edit_title,
                     "content": edit_content,
                     "source": edit_source,
                     "category": edit_category,
                 }
-                update_item(ADMIN_DATA_PATH, url, updated_fields)
-                step1.write("✅ JSON 업데이트 완료")
+                saved = db_upsert_document(updated_doc)
+                step1.write("✅ DB 업데이트 완료")
 
-                if _pinecone_ok:
+                if _db_ok:
                     step2.write("⏳ 기존 벡터 삭제 & 재임베딩 중...")
                     result = ingest_document(
                         title=edit_title, content=edit_content,
                         source=edit_source, url=url,
-                        pinecone_index=pinecone_index,
+                        supabase_client=supabase_client,
+                        document_id=saved.get("id", ""),
                     )
                     step2.write(f"✅ {result['chunks']}개 청크 재업로드 완료")
                 else:
-                    step2.write("⚠️ Pinecone 미연결 — 벡터 인덱싱 건너뜀")
+                    step2.write("⚠️ Supabase 미연결 — 벡터 인덱싱 건너뜀")
 
                 status.update(label="수정 완료!", state="complete")
 
@@ -306,22 +288,42 @@ with st.sidebar:
 # 📋 문서 관리
 # ══════════════════════════════════════════════════════════════
 if nav == "📋 문서 관리":
-    st.subheader("등록된 문서 목록")
 
-    # 필터
-    col_filter, col_search, col_refresh = st.columns([2, 3, 1])
+    def _format_date(date_str: str) -> str:
+        """ISO 또는 'YYYY-MM-DD' → '2026. 3. 18.' 포맷."""
+        if not date_str:
+            return "-"
+        try:
+            # ISO 형식 (Supabase timestamptz)
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            return f"{dt.year}. {dt.month}. {dt.day}."
+        except (ValueError, TypeError):
+            try:
+                dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
+                return f"{dt.year}. {dt.month}. {dt.day}."
+            except (ValueError, TypeError):
+                return "-"
+
+    def _doc_type_icon(source: str) -> str:
+        """출처별 문서 아이콘."""
+        icons = {"admin": "", "eluocnc": "", "board": ""}
+        return icons.get(source, "")
+
+    # ── 상단 필터 영역 ──
+    col_search, col_filter, col_count = st.columns([3, 2, 2])
+    with col_search:
+        keyword = st.text_input(
+            "검색",
+            placeholder="문서 검색...",
+            label_visibility="collapsed",
+        )
     with col_filter:
         source_filter = st.selectbox(
             "출처 필터",
             ["전체", "admin", "eluocnc", "board"],
             format_func=lambda x: "전체" if x == "전체" else SOURCE_LABELS.get(x, x),
+            label_visibility="collapsed",
         )
-    with col_search:
-        keyword = st.text_input("키워드 검색", placeholder="제목 또는 내용 검색")
-    with col_refresh:
-        st.write("")  # spacer
-        if st.button("🔄 새로고침"):
-            st.rerun()
 
     # 문서 로드
     all_docs = load_all_documents()
@@ -338,14 +340,18 @@ if nav == "📋 문서 관리":
             or keyword_lower in d.get("content", "")[:500].lower()
         ]
 
+    with col_count:
+        st.markdown(
+            f"<div style='padding-top:8px; text-align:right; color:#888; font-size:0.9rem;'>"
+            f"총 <b>{len(filtered_docs)}</b>개 문서</div>",
+            unsafe_allow_html=True,
+        )
+
     # 필터 변경 감지 → 페이지 리셋
     current_filter_key = f"{source_filter}|{keyword}"
     if st.session_state.get("_last_filter_key") != current_filter_key:
         st.session_state["_last_filter_key"] = current_filter_key
         st.session_state["admin_page"] = 0
-
-    # 통계
-    st.metric("검색 결과", f"{len(filtered_docs)}건 / 전체 {len(all_docs)}건")
 
     if not filtered_docs:
         st.info("조건에 맞는 문서가 없습니다.")
@@ -353,7 +359,6 @@ if nav == "📋 문서 관리":
         # ── 페이지네이션 계산 ──
         total_pages = max(1, (len(filtered_docs) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
         current_page = st.session_state.get("admin_page", 0)
-        # 삭제 후 페이지 범위 초과 방지
         if current_page >= total_pages:
             current_page = total_pages - 1
             st.session_state["admin_page"] = current_page
@@ -362,29 +367,59 @@ if nav == "📋 문서 관리":
         end_idx = min(start_idx + ITEMS_PER_PAGE, len(filtered_docs))
         page_docs = filtered_docs[start_idx:end_idx]
 
-        # ── 문서 목록 렌더링 ──
+        # ── 테이블 헤더 ──
+        st.markdown(
+            '<div class="admin-table-header">'
+            '<span class="col-title">문서명</span>'
+            '<span class="col-source">출처</span>'
+            '<span class="col-date">업로드 날짜</span>'
+            '<span class="col-status">상태</span>'
+            '<span class="col-action">작업</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── 테이블 행 렌더링 ──
         for i, doc in enumerate(page_docs):
             global_idx = start_idx + i
             src = doc.get("source", "")
             src_label = SOURCE_LABELS.get(src, src)
             title = doc.get("title", "(제목 없음)")
             url = doc.get("url", "")
-            data_path = doc.get("_data_path", "")
+            date_str = _format_date(doc.get("created_at", ""))
+            icon = _doc_type_icon(src)
 
-            col1, col2, col3 = st.columns([5, 1, 1])
-            with col1:
-                st.markdown(f"**[{src_label}]** {title}")
-                if url and not url.startswith("admin://"):
-                    st.caption(url)
-                if doc.get("category"):
-                    st.caption(f"카테고리: {doc['category']}")
-            with col2:
-                if st.button("👁️ 보기", key=f"view_{global_idx}_{url}"):
+            col_title, col_src, col_date, col_status, col_del = st.columns(
+                [4, 1.5, 1.5, 1, 0.7]
+            )
+            with col_title:
+                if st.button(
+                    f"{icon}  {title}",
+                    key=f"view_{global_idx}_{url}",
+                    use_container_width=True,
+                ):
                     st.session_state["_dialog_doc"] = doc
                     st.session_state["_dialog_is_admin"] = src == "admin"
                     show_doc_detail_dialog()
-            with col3:
-                if st.button("🗑️", key=f"del_{global_idx}_{url}"):
+            with col_src:
+                st.markdown(
+                    f"<div class='admin-table-cell'>{src_label}</div>",
+                    unsafe_allow_html=True,
+                )
+            with col_date:
+                st.markdown(
+                    f"<div class='admin-table-cell'>{date_str}</div>",
+                    unsafe_allow_html=True,
+                )
+            with col_status:
+                st.markdown(
+                    '<div class="admin-table-cell">'
+                    '<span class="status-badge">활성</span>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+            with col_del:
+                if st.button(" ", key=f"del_{global_idx}_{url}"):
                     st.session_state[f"confirm_delete_{url}"] = True
 
             # 삭제 확인
@@ -394,24 +429,24 @@ if nav == "📋 문서 관리":
                 with col_yes:
                     if st.button("삭제 확인", key=f"yes_del_{global_idx}_{url}", type="primary"):
                         with st.spinner("삭제 중..."):
-                            # S3에서 이미지 삭제
-                            s3_deleted = 0
-                            if doc.get("attachments"):
+                            # Supabase Storage에서 이미지 삭제
+                            storage_deleted = 0
+                            meta = doc.get("metadata", {})
+                            if meta.get("attachments") or doc.get("attachments"):
                                 try:
-                                    from storage.s3_storage import is_configured, delete_images
+                                    from storage.supabase_storage import is_configured as storage_ok, delete_images
                                     import hashlib
-                                    if is_configured():
+                                    if storage_ok():
                                         url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
-                                        s3_deleted = delete_images(f"doc_images/{url_hash}_")
+                                        storage_deleted = delete_images(f"doc_images/{url_hash}_")
                                 except Exception as e:
-                                    print(f"[warn] S3 이미지 삭제 실패: {e}")
-                            # JSON에서 삭제
-                            if data_path:
-                                delete_item(Path(data_path), url)
-                            # Pinecone에서 삭제
+                                    print(f"[warn] Storage 이미지 삭제 실패: {e}")
+                            # DB에서 삭제 (CASCADE로 chunks도 삭제됨)
+                            db_delete_document(url)
+                            # 벡터도 명시적 삭제 (안전장치)
                             vec_deleted = 0
-                            if _pinecone_ok:
-                                vec_deleted = delete_document(url, pinecone_index)
+                            if _db_ok:
+                                vec_deleted = delete_document(url, supabase_client=supabase_client)
                         del st.session_state[f"confirm_delete_{url}"]
                         st.toast(f"'{title}' 삭제 완료 (벡터 {vec_deleted}개)")
                         st.rerun()
@@ -419,8 +454,6 @@ if nav == "📋 문서 관리":
                     if st.button("취소", key=f"no_del_{global_idx}_{url}"):
                         del st.session_state[f"confirm_delete_{url}"]
                         st.rerun()
-
-            st.divider()
 
         # ── 페이지네이션 컨트롤 ──
         if total_pages > 1:
@@ -479,7 +512,7 @@ elif nav == "📤 새 문서 등록":
                 with st.expander("추출된 텍스트 미리보기"):
                     st.text(content[:2000] + ("..." if len(content) > 2000 else ""))
             if _extraction_result.images:
-                st.info(f"이미지 {len(_extraction_result.images)}장 감지됨 (등록 시 S3에 업로드)")
+                st.info(f"이미지 {len(_extraction_result.images)}장 감지됨 (등록 시 Supabase Storage에 업로드)")
     elif input_method == "직접 입력":
         title = st.text_input("제목", key="manual_title")
         url = st.text_input("관련 URL (선택사항)", key="manual_url")
@@ -510,7 +543,7 @@ elif nav == "📤 새 문서 등록":
         if "url_fetched_title" in st.session_state:
             fetched_url = st.session_state["url_fetched_url"]
             # 중복 URL 경고
-            existing = find_item_by_url(ADMIN_DATA_PATH, fetched_url)
+            existing = db_get_document(fetched_url)
             if existing:
                 st.warning(f"이미 등록된 URL입니다: '{existing.get('title', '')}'")
 
@@ -536,18 +569,26 @@ elif nav == "📤 새 문서 등록":
         with st.status("문서 등록 중...", expanded=True) as status:
             steps = st.container()
 
-            # Step 1: 텍스트 준비
-            steps.write("✅ Step 1: 텍스트 준비 완료")
+            # Step 1: DB에 문서 저장
+            steps.write("⏳ Step 1: DB 저장 중...")
+            doc_data = {
+                "url": url,
+                "title": title,
+                "content": content,
+                "source": source,
+                "category": category,
+            }
+            saved = db_upsert_document(doc_data)
+            doc_id = saved.get("id", "")
+            steps.write("✅ Step 1: DB 저장 완료")
 
-            if _pinecone_ok and extracted_images:
+            if _db_ok and extracted_images:
                 # 이미지 포함 미디어 파이프라인
-                step_container = steps.empty()
-
                 def _on_progress(step: str, detail: str):
                     label_map = {
-                        "image_upload": "⏳ Step 2: 이미지 S3 업로드 중...",
+                        "image_upload": "⏳ Step 2: 이미지 업로드 중...",
                         "image_upload_done": f"✅ Step 2: 이미지 업로드 완료 ({detail})",
-                        "r2_skip": f"⚠️ Step 2: {detail}",
+                        "storage_skip": f"⚠️ Step 2: {detail}",
                         "image_describe": "⏳ Step 3: 이미지 설명 생성 중 (Claude Vision)...",
                         "image_describe_done": f"✅ Step 3: 이미지 설명 완료 ({detail})",
                         "image_vectorize": "⏳ Step 4: 이미지 벡터화 중...",
@@ -560,58 +601,39 @@ elif nav == "📤 새 문서 등록":
 
                 result = ingest_document_with_media(
                     title=title, content=content, source=source, url=url,
-                    pinecone_index=pinecone_index,
+                    supabase_client=supabase_client,
+                    document_id=doc_id,
                     images=extracted_images,
                     progress_callback=_on_progress,
                 )
 
-                # JSON에 attachments 포함
-                doc_data = {
-                    "title": title,
-                    "content": content,
-                    "url": url,
-                    "source": source,
-                    "category": category,
-                }
+                # attachments 메타데이터 업데이트
                 if result.get("image_urls"):
                     doc_data["attachments"] = [{
                         "filename": uploaded.name if uploaded else "file",
                         "images": result["image_urls"],
                     }]
-
-                steps.write("⏳ Step 6: JSON 저장 중...")
-                add_item(ADMIN_DATA_PATH, doc_data)
-                steps.write("✅ Step 6: JSON 저장 완료")
+                    db_upsert_document(doc_data)
 
                 summary = f"텍스트 {result['chunks']}개 청크 + 이미지 {result['images']}개"
                 if result.get("deleted", 0) > 0:
                     summary += f" (기존 {result['deleted']}개 삭제 후 재등록)"
             else:
-                # 기존 텍스트 전용 파이프라인
-                steps.write("⏳ Step 2: JSON 저장 중...")
-                doc_data = {
-                    "title": title,
-                    "content": content,
-                    "url": url,
-                    "source": source,
-                    "category": category,
-                }
-                add_item(ADMIN_DATA_PATH, doc_data)
-                steps.write("✅ Step 2: JSON 저장 완료")
-
-                if _pinecone_ok:
-                    steps.write("⏳ Step 3: 임베딩 & Pinecone 업로드 중...")
+                # 텍스트 전용 파이프라인
+                if _db_ok:
+                    steps.write("⏳ Step 2: 임베딩 & 업로드 중...")
                     result = ingest_document(
                         title=title, content=content, source=source, url=url,
-                        pinecone_index=pinecone_index,
+                        supabase_client=supabase_client,
+                        document_id=doc_id,
                     )
-                    steps.write(f"✅ Step 3: {result['chunks']}개 청크 업로드 완료")
+                    steps.write(f"✅ Step 2: {result['chunks']}개 청크 업로드 완료")
                     summary = f"{result['chunks']}개 청크"
                     if result.get("deleted", 0) > 0:
                         summary += f" (기존 {result['deleted']}개 삭제 후 재등록)"
                 else:
-                    steps.write("⚠️ Pinecone 미연결 — 벡터 인덱싱 건너뜀 (JSON만 저장)")
-                    summary = "JSON만 저장"
+                    steps.write("⚠️ Supabase 미연결 — 벡터 인덱싱 건너뜀 (DB만 저장)")
+                    summary = "DB만 저장"
 
             status.update(label="등록 완료!", state="complete")
 

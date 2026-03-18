@@ -16,7 +16,7 @@ load_dotenv()
 # Streamlit Cloud secrets → 환경변수 주입
 try:
     import streamlit as st
-    for key in ("ANTHROPIC_API_KEY", "PINECONE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+    for key in ("ANTHROPIC_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
         if key in st.secrets and key not in os.environ:
             os.environ[key] = st.secrets[key]
 except Exception:
