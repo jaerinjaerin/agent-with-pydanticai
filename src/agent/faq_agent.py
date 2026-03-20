@@ -134,7 +134,7 @@ def get_data_stats(ctx: RunContext[AgentDeps]) -> str:
 
 
 def process_expense(ctx: RunContext[AgentDeps]) -> str:
-    """사용자가 업로드한 영수증 이미지를 분석하여 비용처리 정보를 추출합니다."""
+    """영수증 이미지를 분석하여 비용처리 정보를 추출합니다. 이 도구가 목록에 보이면 이미지가 이미 첨부된 상태이므로 바로 호출하세요."""
     receipt = ctx.deps.receipt_data
     if not receipt:
         return "영수증 이미지가 첨부되지 않았습니다. 이미지를 업로드한 후 다시 요청해주세요."
@@ -202,8 +202,9 @@ faq_agent = Agent(
         "   - 검색 결과의 내용이 잘려 보이거나 상세 정보가 필요하면 get_item_detail로 전체 내용을 추가 조회하세요.\n\n"
         "2. **목록/통계 질문** (예: '뭐가 있어?', '몇 개야?') → list_titles 또는 get_data_stats 1회.\n\n"
         "3. **특정 항목 상세** (정확한 제목을 알 때) → get_item_detail 1회.\n\n"
-        "4. **비용처리/영수증 분석** → 사용자가 영수증 분석, 비용처리, 경비정산, 영수증 처리 등을 요청하면 process_expense 1회 호출.\n"
-        "   - process_expense 도구가 보이지 않으면 이미지가 첨부되지 않은 것입니다. '영수증 이미지를 먼저 첨부해주세요'라고 안내.\n"
+        "4. **비용처리/영수증 분석** → 사용자가 영수증 분석, 비용처리, 경비정산, 영수증 처리 등을 요청하면:\n"
+        "   - process_expense 도구가 도구 목록에 존재하면, 이미지가 이미 첨부된 상태입니다. **무조건 process_expense를 호출하세요. 절대 안내 메시지를 보내지 마세요.**\n"
+        "   - process_expense 도구가 도구 목록에 존재하지 않으면, 이미지가 첨부되지 않은 것입니다. '영수증 이미지를 먼저 첨부해주세요'라고 안내.\n"
         "   - 도구가 [EXPENSE_RESULT: {...}] 형식으로 반환하면, JSON에서 정보를 추출하여 아래 형식으로 정리:\n"
         "     **📋 영수증 분석 결과**\n"
         "     - **금액:** {amount}원\n"
@@ -264,6 +265,19 @@ faq_agent = Agent(
         Tool(process_expense, takes_ctx=True, prepare=_prepare_expense),
     ],
 )
+
+
+@faq_agent.system_prompt
+async def _dynamic_receipt_prompt(ctx: RunContext[AgentDeps]) -> str:
+    """영수증 데이터가 있으면 동적으로 시스템 프롬프트를 추가한다."""
+    if ctx.deps.receipt_data is not None:
+        return (
+            "\n\n## ⚠️ 현재 상태: 영수증 이미지가 첨부되어 있습니다.\n"
+            "사용자가 비용처리, 영수증 분석, 경비정산 등을 요청하면 "
+            "**반드시 process_expense 도구를 즉시 호출하세요.** "
+            "절대로 '이미지를 첨부해주세요'라고 안내하지 마세요. 이미 첨부되어 있습니다."
+        )
+    return ""
 
 
 @faq_agent.output_validator
