@@ -197,12 +197,10 @@
    * "새채팅" 트리거 버튼을 찾아 숨기고, 커스텀 버튼을 좌상단에 고정 생성한다.
    */
   function handleNewChatButton() {
-    // 숨겨진 Streamlit 버튼 찾기 & 숨기기
-    var triggerBtn = null;
+    // 숨겨진 Streamlit "새채팅" 트리거 버튼 찾아 숨기기
     var buttons = doc.querySelectorAll('button[kind="secondary"]');
     for (var i = 0; i < buttons.length; i++) {
       if (buttons[i].textContent.trim() === '새채팅') {
-        triggerBtn = buttons[i];
         var el = buttons[i];
         while (el && (!el.getAttribute || el.getAttribute('data-testid') !== 'stElementContainer')) {
           el = el.parentElement;
@@ -212,27 +210,24 @@
       }
     }
 
-    // 커스텀 버튼이 이미 있으면 스킵
+    // 마커가 있고 커스텀 버튼이 아직 없으면 생성
+    var marker = doc.getElementById('eluo-new-chat-marker');
+    if (!marker) return;
     if (doc.querySelector('.new-chat-btn')) return;
 
-    // 커스텀 버튼 생성
     var btn = doc.createElement('button');
     btn.className = 'new-chat-btn';
     btn.type = 'button';
-    btn.innerHTML = '&#x2b; 새채팅';
-    btn.title = '새 대화 시작';
-    btn.addEventListener('click', function(e) {
-      e.preventDefault();
-      // 숨겨진 Streamlit 버튼을 프로그래밍 방식으로 클릭
-      var target = null;
-      var btns = doc.querySelectorAll('button[kind="secondary"]');
-      for (var j = 0; j < btns.length; j++) {
-        if (btns[j].textContent.trim() === '새채팅') {
-          target = btns[j];
-          break;
+    btn.textContent = '+ \uc0c8\ucc44\ud305';
+    btn.title = '\uc0c8 \ub300\ud654 \uc2dc\uc791';
+    btn.addEventListener('click', function() {
+      var b = doc.querySelectorAll('button[kind="secondary"]');
+      for (var i = 0; i < b.length; i++) {
+        if (b[i].textContent.trim() === '\uc0c8\ucc44\ud305') {
+          b[i].click();
+          return;
         }
       }
-      if (target) target.click();
     });
     doc.body.appendChild(btn);
   }

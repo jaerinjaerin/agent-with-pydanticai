@@ -343,6 +343,9 @@ def _run_chat():
             del st.session_state["conversation_id"]
         st.rerun()
 
+    # 새채팅 버튼 — HTML 마커로 렌더 (JS가 이 마커를 감지하여 fixed 버튼 생성)
+    st.markdown('<div id="eluo-new-chat-marker" style="display:none"></div>', unsafe_allow_html=True)
+
     # 웰컴 — st.empty()로 DOM 위치만 확보. 실제 렌더링은 prompt 확인 후 결정.
     # 이렇게 하면 첫 제출 사이클에서 웰컴이 아예 그려지지 않아 레이아웃 점프가 없다.
     welcome_slot = st.empty()

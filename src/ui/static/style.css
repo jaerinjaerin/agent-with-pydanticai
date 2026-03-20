@@ -129,8 +129,12 @@ button[kind="headerNoPadding"],
 }
 
 /* ── Header 투명 ── */
-.stApp > header {
+.stApp > header,
+header[data-testid="stHeader"],
+.stAppHeader {
     background: transparent !important;
+    z-index: 0 !important;
+    pointer-events: none !important;
 }
 
 /* ── Pinecone 연결 뱃지 ── */
@@ -762,24 +766,22 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 5px 14px;
+    padding: 6px 16px;
     border-radius: 20px;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-weight: 600;
     letter-spacing: 0.02em;
-    background: rgba(240, 240, 255, 0.85);
-    border: 1px solid rgba(0, 0, 127, 0.15);
-    color: #00007F;
+    background: #00007F;
+    border: none;
+    color: #FFFFFF;
     cursor: pointer;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
     transition: all 0.2s ease;
+    box-shadow: 0 2px 6px rgba(0, 0, 127, 0.25);
 }
 
 .new-chat-btn:hover {
-    background: rgba(220, 220, 255, 0.95);
-    border-color: rgba(0, 0, 127, 0.35);
-    box-shadow: 0 2px 8px rgba(0, 0, 127, 0.12);
+    background: #0000A0;
+    box-shadow: 0 4px 10px rgba(0, 0, 127, 0.35);
     transform: translateY(-1px);
 }
 
@@ -796,8 +798,8 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     .new-chat-btn {
         top: 12px;
         left: 12px;
-        font-size: 0.65rem;
-        padding: 4px 10px;
+        font-size: 0.68rem;
+        padding: 5px 12px;
     }
 
     .pinecone-badge {
