@@ -310,7 +310,9 @@ def _run_chat():
             unsafe_allow_html=True,
         )
     else:
-        st.session_state.receipt_data = None
+        # file_uploader가 비어있어도 기존 receipt_data를 유지 (리런 시 상태 보존)
+        # receipt_data 정리는 에이전트 응답 후 명시적으로 수행
+        pass
 
     # ── 모델 선택 드롭다운 (입력창 바로 위) ──
     def _on_model_change():
