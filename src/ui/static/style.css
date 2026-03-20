@@ -4,6 +4,67 @@
    (색상/폰트/라운딩/테두리 → .streamlit/config.toml [theme])
    ═══════════════════════════════════════════════════ */
 
+/* ── 메인 콘텐츠 gap 제거 — zero-height 숨겨진 위젯 사이의 phantom 간격 방지 ── */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
+    gap: 0 !important;
+}
+
+/* ── 로딩 오버레이 (FOUC 방지) ── */
+#eluo-loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #FFFFFF;
+    z-index: 999999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.35s ease;
+}
+
+#eluo-loading-overlay.fade-out {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.loading-logo {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+.loading-text {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #00007F;
+    letter-spacing: -0.03em;
+}
+
+.loading-bar {
+    width: 120px;
+    height: 3px;
+    background: #E5E5E5;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.loading-bar-fill {
+    width: 40%;
+    height: 100%;
+    background: #00007F;
+    border-radius: 2px;
+    animation: loading-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes loading-slide {
+    0%   { transform: translateX(-100%); }
+    50%  { transform: translateX(200%); }
+    100% { transform: translateX(-100%); }
+}
+
 /* ── 로딩 애니메이션 ── */
 @keyframes thinking-pulse {
     0%, 100% { opacity: 0.3; }
@@ -54,8 +115,17 @@ div[data-testid="stBottomBlockContainer"] {
 
 /* ── 사이드바 숨김 ── */
 section[data-testid="stSidebar"],
-[data-testid="collapsedControl"] {
-    display: none;
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"],
+button[kind="headerNoPadding"],
+.stAppViewBlockContainer ~ div[data-testid="collapsedControl"] {
+    display: none !important;
+    visibility: hidden !important;
+    width: 0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+    position: absolute !important;
+    pointer-events: none !important;
 }
 
 /* ── Header 투명 ── */
@@ -114,6 +184,22 @@ section[data-testid="stSidebar"],
 @keyframes pulse-dot {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.5; }
+}
+
+/* ── 웰컴 상태: body에 .eluo-welcome 클래스가 있을 때만 입력창 중앙 배치 ── */
+body.eluo-welcome [data-testid="stChatInput"] {
+    position: fixed !important;
+    bottom: auto !important;
+    top: 40% !important;
+    left: 50% !important;
+    transform: translate(-50%, 0) !important;
+    max-width: 680px !important;
+    width: 90% !important;
+}
+
+body.eluo-welcome [data-testid="stChatInput"] textarea {
+    min-height: 56px !important;
+    font-size: 1.05rem !important;
 }
 
 /* ── 웰컴 카드 ── */
@@ -203,6 +289,42 @@ section[data-testid="stSidebar"],
     margin-top: -8px;
 }
 
+/* 타임스탬프 — 버블 내부 (리플로우 방지) */
+.msg-timestamp-inline {
+    font-size: 0.68rem;
+    color: #808080;
+    padding: 4px 0 0 0;
+    margin: 0;
+    opacity: 0.7;
+}
+
+/* 버블 내부 vertical block gap 축소 */
+[data-testid="stChatMessage"] [data-testid="stVerticalBlock"] {
+    gap: 2px !important;
+}
+
+/* 이미지 로드 전 placeholder — layout shift 방지 */
+.chat-img-wrap {
+    min-height: 200px;
+    background: #f5f5f5;
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 0.5rem 0;
+}
+.chat-img-wrap img {
+    width: 100%;
+    height: auto;
+    display: block;
+    object-fit: contain;
+    border-radius: 12px;
+}
+
+/* 관련 주제 placeholder (이전 메시지에서 버튼 대신 높이 유지) */
+.related-topics-placeholder {
+    height: 38px;
+    visibility: hidden;
+}
+
 /* ── 모델 선택 드롭다운 ── */
 
 /* JS 이동 전: 메인 콘텐츠 영역에 있을 때 숨김 (이동 전 깜빡임 방지) */
@@ -212,6 +334,16 @@ div[data-testid="stMainBlockContainer"] div[data-testid="stSelectbox"] {
     position: absolute !important;
     width: 0 !important;
     height: 0 !important;
+    overflow: hidden !important;
+}
+
+/* 숨겨진 위젯의 부모 stElementContainer 래퍼도 축소 (flex gap 제거) */
+[data-testid="stMainBlockContainer"] [data-testid="stElementContainer"]:has([data-testid="stSelectbox"]),
+[data-testid="stMainBlockContainer"] [data-testid="stElementContainer"]:has([data-testid="stFileUploader"]) {
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
     overflow: hidden !important;
 }
 
@@ -233,7 +365,8 @@ div[data-testid="stMainBlockContainer"] div[data-testid="stSelectbox"] {
 }
 
 /* stChatInput 외부 컨테이너: relative 기준점 + 하단 패딩 (selectbox 행) */
-[data-testid="stChatInput"] > div:first-child {
+/* :has(textarea)로 타겟팅 — 미리보기 div가 first-child로 삽입돼도 영향 없음 */
+[data-testid="stChatInput"] > div:has(textarea) {
     position: relative !important;
     padding-bottom: 44px !important;
 }
@@ -520,6 +653,94 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
 }
 
+/* ── 영수증 file_uploader 숨김 ── */
+[data-testid="stMainBlockContainer"] [data-testid="stFileUploader"] {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    position: absolute !important;
+    width: 0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+}
+
+/* ── + 버튼 (영수증 첨부) ── */
+.receipt-upload-btn {
+    position: absolute !important;
+    bottom: 8px !important;
+    left: 8px !important;
+    z-index: 10;
+    width: 32px !important;
+    height: 32px !important;
+    border-radius: 8px !important;
+    border: 1px solid #E5E5E5 !important;
+    background: #FFFFFF !important;
+    color: #808080 !important;
+    font-size: 1.2rem !important;
+    font-weight: 500 !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    transition: all 0.2s ease;
+    line-height: 1;
+}
+
+.receipt-upload-btn:hover {
+    border-color: #00007F !important;
+    color: #00007F !important;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* ── 영수증 미리보기 카드 (입력창 위) ── */
+.receipt-preview {
+    position: relative !important;
+    display: inline-block !important;
+    width: 130px !important;
+    height: 130px !important;
+    background: #f8f8fa;
+    border: 1px solid #e0e0e0;
+    border-radius: 12px;
+    padding: 0 !important;
+    margin-bottom: 6px;
+    overflow: visible !important;
+}
+
+.receipt-preview-img {
+    width: 130px !important;
+    height: 130px !important;
+    object-fit: cover;
+    border-radius: 12px;
+    display: block !important;
+}
+
+.receipt-preview-remove {
+    position: absolute !important;
+    top: -6px !important;
+    right: -6px !important;
+    width: 20px !important;
+    height: 20px !important;
+    border-radius: 50% !important;
+    border: none !important;
+    background: #666 !important;
+    color: #fff !important;
+    font-size: 0.75rem !important;
+    cursor: pointer !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: background 0.15s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.receipt-preview-remove:hover {
+    background: #dc3545 !important;
+}
+
 /* ── Scrollbar 숨기기 ── */
 .no-scrollbar::-webkit-scrollbar,
 .scrollbar-hide::-webkit-scrollbar {
@@ -532,10 +753,51 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
     scrollbar-width: none;
 }
 
+/* ── 새채팅 버튼 (좌상단 고정) ── */
+.new-chat-btn {
+    position: fixed;
+    top: 16px;
+    left: 20px;
+    z-index: 99999;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: rgba(240, 240, 255, 0.85);
+    border: 1px solid rgba(0, 0, 127, 0.15);
+    color: #00007F;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transition: all 0.2s ease;
+}
+
+.new-chat-btn:hover {
+    background: rgba(220, 220, 255, 0.95);
+    border-color: rgba(0, 0, 127, 0.35);
+    box-shadow: 0 2px 8px rgba(0, 0, 127, 0.12);
+    transform: translateY(-1px);
+}
+
+.new-chat-btn:active {
+    transform: translateY(0);
+}
+
 /* ── 반응형 ── */
 @media (max-width: 768px) {
     .welcome-greeting {
         font-size: 1.5rem;
+    }
+
+    .new-chat-btn {
+        top: 12px;
+        left: 12px;
+        font-size: 0.65rem;
+        padding: 4px 10px;
     }
 
     .pinecone-badge {

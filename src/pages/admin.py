@@ -1,7 +1,7 @@
 """
 문서 관리 어드민 페이지.
 
-문서 등록/수정/삭제 → Supabase DB + pgvector 벡터 인덱스 관리.
+문서 등록/수정/삭제 → JSON 저장 + Pinecone 벡터 인덱스 + 지식그래프 관리.
 """
 
 import asyncio
@@ -10,7 +10,6 @@ import re
 import sys
 import tempfile
 import time
-from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -22,17 +21,16 @@ import streamlit as st
 # src 디렉토리를 path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from graph.supabase_vector import init_db
+from graph.embedding_index import init_pinecone
 from graph.ingest import ingest_document, ingest_document_with_media, delete_document
-from storage.supabase_documents import (
-    list_documents as db_list_documents,
-    get_document as db_get_document,
-    upsert_document as db_upsert_document,
-    delete_document as db_delete_document,
+from graph.data_store import (
+    add_item, update_item, delete_item, find_item_by_url,
 )
-from storage.supabase_client import is_configured as supabase_configured
+from storage import supabase_docs
 
-st.set_page_config(page_title="RAG 문서 관리", page_icon="📄", layout="wide")
+_use_supabase = supabase_docs.is_configured()
+
+# set_page_config는 엔트리포인트(app.py)에서 호출됨
 
 # Admin 전용 CSS 로드
 _STATIC = Path(__file__).resolve().parents[1] / "ui" / "static"
@@ -64,17 +62,20 @@ st.title("📄 RAG 문서 관리")
 st.caption("AI 챗봇이 참조할 문서를 관리하세요")
 
 # ── 상수 ──
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+ADMIN_DATA_PATH = DATA_DIR / "admin_documents.json"
+
 ITEMS_PER_PAGE = 15
 
 SOURCE_LABELS = {
-    "admin": "사내문서",
-    "eluocnc": "회사 홈페이지",
-    "board": "사내 게시판",
+    "admin": "문서",
+    "eluocnc": "엘루오씨앤씨",
+    "FAQ": "WORKS게시판",
 }
 
 # ── Streamlit Cloud secrets → 환경변수 주입 ──
 try:
-    for key in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+    for key in ("PINECONE_API_KEY", "ANTHROPIC_API_KEY"):
         if key in st.secrets and key not in os.environ:
             os.environ[key] = st.secrets[key]
 except FileNotFoundError:
@@ -85,60 +86,39 @@ except FileNotFoundError:
 
 @st.cache_resource
 def load_resources():
-    """Supabase 클라이언트를 로드한다."""
-    if not supabase_configured():
+    """Pinecone 인덱스를 로드한다."""
+    api_key = os.environ.get("PINECONE_API_KEY", "")
+    if not api_key:
         return None
-    return init_db()
+    pc_index = init_pinecone(api_key)
+    return pc_index
 
 
 try:
-    supabase_client = load_resources()
+    pinecone_index = load_resources()
 except Exception as e:
-    supabase_client = None
+    pinecone_index = None
     err_msg = str(e)
-    st.error(f"Supabase 연결 실패: {err_msg[:200]}")
+    if "401" in err_msg or "Unauthorized" in err_msg or "Invalid API Key" in err_msg:
+        st.error("Pinecone API 키가 유효하지 않습니다. `.env` 파일의 PINECONE_API_KEY를 확인해주세요.")
+    else:
+        st.error(f"Pinecone 연결 실패: {err_msg[:200]}")
 
-if supabase_client is None:
-    st.warning("Supabase에 연결되지 않았습니다. 환경변수를 확인해주세요. 문서 관리만 가능합니다.")
-    _db_ok = False
+if pinecone_index is None:
+    st.warning("Pinecone에 연결되지 않았습니다. API 키를 확인해주세요. JSON 문서 관리만 가능합니다.")
+    _pinecone_ok = False
 else:
-    _db_ok = True
+    _pinecone_ok = True
 
 
-# ── 문서 로드 헬퍼 ──
-
-def load_all_documents() -> list[dict]:
-    """Supabase에서 모든 문서를 로드한다."""
-    try:
-        return db_list_documents()
-    except Exception as e:
-        st.error(f"문서 로드 실패: {e}")
-        return []
+# source 필터 매핑 (UI key → DB source)
+_SOURCE_DB_MAP = {"FAQ": "FAQ", "admin": "admin", "eluocnc": "eluocnc"}
 
 
 def generate_admin_url(title: str) -> str:
     """어드민 문서용 고유 URL을 생성한다."""
     sanitized = re.sub(r"[^\w가-힣-]", "_", title)[:50]
     return f"admin://{int(time.time())}_{sanitized}"
-
-
-def extract_file_content(uploaded_file) -> str:
-    """업로드된 파일에서 텍스트를 추출한다."""
-    suffix = Path(uploaded_file.name).suffix.lower()
-    if suffix in (".txt", ".md"):
-        return uploaded_file.read().decode("utf-8", errors="ignore")
-
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(uploaded_file.read())
-        tmp_path = Path(tmp.name)
-    try:
-        from scraper.file_extractor import extract_text
-        return extract_text(tmp_path)
-    except Exception as e:
-        st.error(f"파일 텍스트 추출 실패: {e}")
-        return ""
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
 
 def extract_file_content_with_media(uploaded_file):
@@ -195,7 +175,7 @@ def show_doc_detail_dialog():
         st.caption(f"URL: {url}")
 
         edit_title = st.text_input("제목", value=doc.get("title", ""), key=f"dlg_title_{k}")
-        _source_options = ["admin", "eluocnc", "board"]
+        _source_options = ["admin", "eluocnc", "FAQ"]
         _current_source = doc.get("source", "admin")
         _source_idx = _source_options.index(_current_source) if _current_source in _source_options else 0
         edit_source = st.selectbox(
@@ -223,28 +203,29 @@ def show_doc_detail_dialog():
                 step2 = st.empty()
                 step3 = st.empty()
 
-                step1.write("⏳ DB 업데이트 중...")
-                updated_doc = {
-                    "url": url,
+                step1.write("⏳ 문서 업데이트 중...")
+                updated_fields = {
                     "title": edit_title,
                     "content": edit_content,
                     "source": edit_source,
                     "category": edit_category,
                 }
-                saved = db_upsert_document(updated_doc)
-                step1.write("✅ DB 업데이트 완료")
+                if _use_supabase:
+                    supabase_docs.update_item(url, updated_fields)
+                else:
+                    update_item(ADMIN_DATA_PATH, url, updated_fields)
+                step1.write("✅ 문서 업데이트 완료")
 
-                if _db_ok:
+                if _pinecone_ok:
                     step2.write("⏳ 기존 벡터 삭제 & 재임베딩 중...")
                     result = ingest_document(
                         title=edit_title, content=edit_content,
                         source=edit_source, url=url,
-                        supabase_client=supabase_client,
-                        document_id=saved.get("id", ""),
+                        pinecone_index=pinecone_index,
                     )
                     step2.write(f"✅ {result['chunks']}개 청크 재업로드 완료")
                 else:
-                    step2.write("⚠️ Supabase 미연결 — 벡터 인덱싱 건너뜀")
+                    step2.write("⚠️ Pinecone 미연결 — 벡터 인덱싱 건너뜀")
 
                 status.update(label="수정 완료!", state="complete")
 
@@ -273,221 +254,20 @@ def show_doc_detail_dialog():
         st.info("크롤링된 문서는 읽기 전용입니다. 삭제만 가능합니다.")
 
 
-# ── 사이드바 내비게이션 ──
-with st.sidebar:
-    st.markdown("### 📄 문서 관리")
-    _nav_options = ["📋 문서 관리", "📤 새 문서 등록"]
-    _default_nav = st.session_state.get("admin_nav", _nav_options[0])
-    _default_idx = _nav_options.index(_default_nav) if _default_nav in _nav_options else 0
-    nav = st.radio("메뉴", _nav_options, index=_default_idx, label_visibility="collapsed")
-    st.session_state["admin_nav"] = nav
-    st.markdown("---")
-    st.page_link("app.py", label="💬 챗봇으로 돌아가기")
+# ── 문서 등록 모달 ──
 
-# ══════════════════════════════════════════════════════════════
-# 📋 문서 관리
-# ══════════════════════════════════════════════════════════════
-if nav == "📋 문서 관리":
-
-    def _format_date(date_str: str) -> str:
-        """ISO 또는 'YYYY-MM-DD' → '2026. 3. 18.' 포맷."""
-        if not date_str:
-            return "-"
-        try:
-            # ISO 형식 (Supabase timestamptz)
-            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            return f"{dt.year}. {dt.month}. {dt.day}."
-        except (ValueError, TypeError):
-            try:
-                dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
-                return f"{dt.year}. {dt.month}. {dt.day}."
-            except (ValueError, TypeError):
-                return "-"
-
-    def _doc_type_icon(source: str) -> str:
-        """출처별 문서 아이콘."""
-        icons = {"admin": "", "eluocnc": "", "board": ""}
-        return icons.get(source, "")
-
-    # ── 상단 필터 영역 ──
-    col_search, col_filter, col_count = st.columns([3, 2, 2])
-    with col_search:
-        keyword = st.text_input(
-            "검색",
-            placeholder="문서 검색...",
-            label_visibility="collapsed",
-        )
-    with col_filter:
-        source_filter = st.selectbox(
-            "출처 필터",
-            ["전체", "admin", "eluocnc", "board"],
-            format_func=lambda x: "전체" if x == "전체" else SOURCE_LABELS.get(x, x),
-            label_visibility="collapsed",
-        )
-
-    # 문서 로드
-    all_docs = load_all_documents()
-
-    # 필터 적용
-    filtered_docs = all_docs
-    if source_filter != "전체":
-        filtered_docs = [d for d in filtered_docs if d.get("source") == source_filter]
-    if keyword:
-        keyword_lower = keyword.lower()
-        filtered_docs = [
-            d for d in filtered_docs
-            if keyword_lower in d.get("title", "").lower()
-            or keyword_lower in d.get("content", "")[:500].lower()
-        ]
-
-    with col_count:
-        st.markdown(
-            f"<div style='padding-top:8px; text-align:right; color:#888; font-size:0.9rem;'>"
-            f"총 <b>{len(filtered_docs)}</b>개 문서</div>",
-            unsafe_allow_html=True,
-        )
-
-    # 필터 변경 감지 → 페이지 리셋
-    current_filter_key = f"{source_filter}|{keyword}"
-    if st.session_state.get("_last_filter_key") != current_filter_key:
-        st.session_state["_last_filter_key"] = current_filter_key
-        st.session_state["admin_page"] = 0
-
-    if not filtered_docs:
-        st.info("조건에 맞는 문서가 없습니다.")
-    else:
-        # ── 페이지네이션 계산 ──
-        total_pages = max(1, (len(filtered_docs) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
-        current_page = st.session_state.get("admin_page", 0)
-        if current_page >= total_pages:
-            current_page = total_pages - 1
-            st.session_state["admin_page"] = current_page
-
-        start_idx = current_page * ITEMS_PER_PAGE
-        end_idx = min(start_idx + ITEMS_PER_PAGE, len(filtered_docs))
-        page_docs = filtered_docs[start_idx:end_idx]
-
-        # ── 테이블 헤더 ──
-        st.markdown(
-            '<div class="admin-table-header">'
-            '<span class="col-title">문서명</span>'
-            '<span class="col-source">출처</span>'
-            '<span class="col-date">업로드 날짜</span>'
-            '<span class="col-status">상태</span>'
-            '<span class="col-action">작업</span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        # ── 테이블 행 렌더링 ──
-        for i, doc in enumerate(page_docs):
-            global_idx = start_idx + i
-            src = doc.get("source", "")
-            src_label = SOURCE_LABELS.get(src, src)
-            title = doc.get("title", "(제목 없음)")
-            url = doc.get("url", "")
-            date_str = _format_date(doc.get("created_at", ""))
-            icon = _doc_type_icon(src)
-
-            col_title, col_src, col_date, col_status, col_del = st.columns(
-                [4, 1.5, 1.5, 1, 0.7]
-            )
-            with col_title:
-                if st.button(
-                    f"{icon}  {title}",
-                    key=f"view_{global_idx}_{url}",
-                    use_container_width=True,
-                ):
-                    st.session_state["_dialog_doc"] = doc
-                    st.session_state["_dialog_is_admin"] = src == "admin"
-                    show_doc_detail_dialog()
-            with col_src:
-                st.markdown(
-                    f"<div class='admin-table-cell'>{src_label}</div>",
-                    unsafe_allow_html=True,
-                )
-            with col_date:
-                st.markdown(
-                    f"<div class='admin-table-cell'>{date_str}</div>",
-                    unsafe_allow_html=True,
-                )
-            with col_status:
-                st.markdown(
-                    '<div class="admin-table-cell">'
-                    '<span class="status-badge">활성</span>'
-                    '</div>',
-                    unsafe_allow_html=True,
-                )
-            with col_del:
-                if st.button(" ", key=f"del_{global_idx}_{url}"):
-                    st.session_state[f"confirm_delete_{url}"] = True
-
-            # 삭제 확인
-            if st.session_state.get(f"confirm_delete_{url}"):
-                st.warning(f"'{title}' 문서를 삭제하시겠습니까?")
-                col_yes, col_no = st.columns(2)
-                with col_yes:
-                    if st.button("삭제 확인", key=f"yes_del_{global_idx}_{url}", type="primary"):
-                        with st.spinner("삭제 중..."):
-                            # Supabase Storage에서 이미지 삭제
-                            storage_deleted = 0
-                            meta = doc.get("metadata", {})
-                            if meta.get("attachments") or doc.get("attachments"):
-                                try:
-                                    from storage.supabase_storage import is_configured as storage_ok, delete_images
-                                    import hashlib
-                                    if storage_ok():
-                                        url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
-                                        storage_deleted = delete_images(f"doc_images/{url_hash}_")
-                                except Exception as e:
-                                    print(f"[warn] Storage 이미지 삭제 실패: {e}")
-                            # DB에서 삭제 (CASCADE로 chunks도 삭제됨)
-                            db_delete_document(url)
-                            # 벡터도 명시적 삭제 (안전장치)
-                            vec_deleted = 0
-                            if _db_ok:
-                                vec_deleted = delete_document(url, supabase_client=supabase_client)
-                        del st.session_state[f"confirm_delete_{url}"]
-                        st.toast(f"'{title}' 삭제 완료 (벡터 {vec_deleted}개)")
-                        st.rerun()
-                with col_no:
-                    if st.button("취소", key=f"no_del_{global_idx}_{url}"):
-                        del st.session_state[f"confirm_delete_{url}"]
-                        st.rerun()
-
-        # ── 페이지네이션 컨트롤 ──
-        if total_pages > 1:
-            col_prev, col_info, col_next = st.columns([1, 2, 1])
-            with col_prev:
-                if st.button("⬅️ 이전", disabled=current_page == 0):
-                    st.session_state["admin_page"] = current_page - 1
-                    st.rerun()
-            with col_info:
-                st.markdown(
-                    f"<div style='text-align:center; padding-top:8px;'>"
-                    f"{current_page + 1} / {total_pages} 페이지</div>",
-                    unsafe_allow_html=True,
-                )
-            with col_next:
-                if st.button("다음 ➡️", disabled=current_page >= total_pages - 1):
-                    st.session_state["admin_page"] = current_page + 1
-                    st.rerun()
-
-
-# ══════════════════════════════════════════════════════════════
-# 📤 새 문서 등록
-# ══════════════════════════════════════════════════════════════
-elif nav == "📤 새 문서 등록":
-    st.subheader("새 문서 등록")
-
+@st.dialog("새 문서 등록", width="large")
+def show_register_dialog():
+    """문서 등록 폼을 모달 다이얼로그로 표시한다."""
     source = st.selectbox(
         "출처 분류",
-        ["admin", "eluocnc", "board"],
+        ["admin", "eluocnc", "FAQ"],
         format_func=SOURCE_LABELS.get,
+        key="reg_source",
     )
-    category = st.text_input("카테고리 (선택사항)", placeholder="예: 업무가이드, 인사규정")
+    category = st.text_input("카테고리 (선택사항)", placeholder="예: 업무가이드, 인사규정", key="reg_category")
 
-    input_method = st.radio("입력 방식", ["파일 업로드", "직접 입력", "URL 수집"], horizontal=True)
+    input_method = st.radio("입력 방식", ["파일 업로드", "직접 입력", "URL 수집"], horizontal=True, key="reg_method")
 
     title = ""
     content = ""
@@ -498,9 +278,10 @@ elif nav == "📤 새 문서 등록":
         uploaded = st.file_uploader(
             "파일 선택",
             type=["pdf", "docx", "xlsx", "pptx", "md", "txt"],
+            key="reg_file",
         )
-        title = st.text_input("제목 (빈칸이면 파일명 사용)", key="upload_title")
-        url = st.text_input("관련 URL (선택사항)", key="upload_url")
+        title = st.text_input("제목 (빈칸이면 파일명 사용)", key="reg_upload_title")
+        url = st.text_input("관련 URL (선택사항)", key="reg_upload_url")
 
         _extraction_result = None
         if uploaded:
@@ -514,18 +295,18 @@ elif nav == "📤 새 문서 등록":
             if _extraction_result.images:
                 st.info(f"이미지 {len(_extraction_result.images)}장 감지됨 (등록 시 Supabase Storage에 업로드)")
     elif input_method == "직접 입력":
-        title = st.text_input("제목", key="manual_title")
-        url = st.text_input("관련 URL (선택사항)", key="manual_url")
-        content = st.text_area("본문 내용", height=300)
+        title = st.text_input("제목", key="reg_manual_title")
+        url = st.text_input("관련 URL (선택사항)", key="reg_manual_url")
+        content = st.text_area("본문 내용", height=300, key="reg_manual_content")
     else:
         # URL 수집
         from scraper.url_scraper import scrape_url, validate_url
 
-        url_input = st.text_input("URL 입력", placeholder="https://example.com/page", key="url_input")
+        url_input = st.text_input("URL 입력", placeholder="https://example.com/page", key="reg_url_input")
 
         col_preview, col_warn = st.columns([1, 3])
         with col_preview:
-            preview_clicked = st.button("🔍 미리보기")
+            preview_clicked = st.button("🔍 미리보기", key="reg_preview")
 
         if preview_clicked and url_input:
             try:
@@ -543,13 +324,13 @@ elif nav == "📤 새 문서 등록":
         if "url_fetched_title" in st.session_state:
             fetched_url = st.session_state["url_fetched_url"]
             # 중복 URL 경고
-            existing = db_get_document(fetched_url)
+            existing = supabase_docs.find_item_by_url(fetched_url) if _use_supabase else find_item_by_url(ADMIN_DATA_PATH, fetched_url)
             if existing:
                 st.warning(f"이미 등록된 URL입니다: '{existing.get('title', '')}'")
 
-            title = st.text_input("제목", value=st.session_state["url_fetched_title"], key="url_title")
+            title = st.text_input("제목", value=st.session_state["url_fetched_title"], key="reg_url_title")
             url = fetched_url
-            content = st.text_area("본문 내용", value=st.session_state["url_fetched_content"], height=300, key="url_content")
+            content = st.text_area("본문 내용", value=st.session_state["url_fetched_content"], height=300, key="reg_url_content")
         else:
             title = ""
             url = ""
@@ -560,7 +341,7 @@ elif nav == "📤 새 문서 등록":
         url = generate_admin_url(title)
 
     # 제출 버튼
-    if st.button("📥 등록", type="primary", disabled=not (title and content)):
+    if st.button("📥 등록", type="primary", disabled=not (title.strip() and content.strip()), key="reg_submit"):
         # 파일 업로드 모드에서 추출된 이미지 가져오기
         extracted_images = None
         if input_method == "파일 업로드" and _extraction_result and _extraction_result.images:
@@ -569,21 +350,13 @@ elif nav == "📤 새 문서 등록":
         with st.status("문서 등록 중...", expanded=True) as status:
             steps = st.container()
 
-            # Step 1: DB에 문서 저장
-            steps.write("⏳ Step 1: DB 저장 중...")
-            doc_data = {
-                "url": url,
-                "title": title,
-                "content": content,
-                "source": source,
-                "category": category,
-            }
-            saved = db_upsert_document(doc_data)
-            doc_id = saved.get("id", "")
-            steps.write("✅ Step 1: DB 저장 완료")
+            # Step 1: 텍스트 준비
+            steps.write("✅ Step 1: 텍스트 준비 완료")
 
-            if _db_ok and extracted_images:
+            if _pinecone_ok and extracted_images:
                 # 이미지 포함 미디어 파이프라인
+                step_container = steps.empty()
+
                 def _on_progress(step: str, detail: str):
                     label_map = {
                         "image_upload": "⏳ Step 2: 이미지 업로드 중...",
@@ -601,45 +374,233 @@ elif nav == "📤 새 문서 등록":
 
                 result = ingest_document_with_media(
                     title=title, content=content, source=source, url=url,
-                    supabase_client=supabase_client,
-                    document_id=doc_id,
+                    pinecone_index=pinecone_index,
                     images=extracted_images,
                     progress_callback=_on_progress,
                 )
 
-                # attachments 메타데이터 업데이트
+                # JSON에 attachments 포함
+                doc_data = {
+                    "title": title,
+                    "content": content,
+                    "url": url,
+                    "source": source,
+                    "category": category,
+                }
                 if result.get("image_urls"):
                     doc_data["attachments"] = [{
-                        "filename": uploaded.name if uploaded else "file",
+                        "filename": "file",
                         "images": result["image_urls"],
                     }]
-                    db_upsert_document(doc_data)
+
+                steps.write("⏳ Step 6: 문서 저장 중...")
+                if _use_supabase:
+                    supabase_docs.add_item(doc_data)
+                else:
+                    add_item(ADMIN_DATA_PATH, doc_data)
+                steps.write("✅ Step 6: 문서 저장 완료")
 
                 summary = f"텍스트 {result['chunks']}개 청크 + 이미지 {result['images']}개"
                 if result.get("deleted", 0) > 0:
                     summary += f" (기존 {result['deleted']}개 삭제 후 재등록)"
             else:
-                # 텍스트 전용 파이프라인
-                if _db_ok:
-                    steps.write("⏳ Step 2: 임베딩 & 업로드 중...")
+                # 기존 텍스트 전용 파이프라인
+                steps.write("⏳ Step 2: 문서 저장 중...")
+                doc_data = {
+                    "title": title,
+                    "content": content,
+                    "url": url,
+                    "source": source,
+                    "category": category,
+                }
+                if _use_supabase:
+                    supabase_docs.add_item(doc_data)
+                else:
+                    add_item(ADMIN_DATA_PATH, doc_data)
+                steps.write("✅ Step 2: 문서 저장 완료")
+
+                if _pinecone_ok:
+                    steps.write("⏳ Step 3: 임베딩 & Pinecone 업로드 중...")
                     result = ingest_document(
                         title=title, content=content, source=source, url=url,
-                        supabase_client=supabase_client,
-                        document_id=doc_id,
+                        pinecone_index=pinecone_index,
                     )
-                    steps.write(f"✅ Step 2: {result['chunks']}개 청크 업로드 완료")
+                    steps.write(f"✅ Step 3: {result['chunks']}개 청크 업로드 완료")
                     summary = f"{result['chunks']}개 청크"
                     if result.get("deleted", 0) > 0:
                         summary += f" (기존 {result['deleted']}개 삭제 후 재등록)"
                 else:
-                    steps.write("⚠️ Supabase 미연결 — 벡터 인덱싱 건너뜀 (DB만 저장)")
-                    summary = "DB만 저장"
+                    steps.write("⚠️ Pinecone 미연결 — 벡터 인덱싱 건너뜀")
+                    summary = "JSON만 저장"
 
             status.update(label="등록 완료!", state="complete")
 
         st.success(f"'{title}' 등록 완료! ({summary})")
-        st.session_state["admin_nav"] = "📋 문서 관리"
         st.rerun()
 
     if not (title and content):
         st.info("제목과 내용을 입력하면 등록 버튼이 활성화됩니다.")
+
+
+# ── 챗봇 복귀 링크 ──
+if st.button("💬 챗봇으로 돌아가기", key="back_to_chat"):
+    st.switch_page("chat_page.py")
+
+# ══════════════════════════════════════════════════════════════
+# 📋 문서 관리
+# ══════════════════════════════════════════════════════════════
+title_col, btn_col = st.columns([8, 2])
+with title_col:
+    st.subheader("등록된 문서 목록")
+with btn_col:
+    if st.button("📤 문서 등록", type="primary"):
+        # 모달 데이터 초기화 — 이전에 닫힌 모달의 잔여 데이터 제거
+        for k in [
+            "url_fetched_title", "url_fetched_content", "url_fetched_url",
+            "reg_source", "reg_category", "reg_method",
+            "reg_file", "reg_upload_title", "reg_upload_url",
+            "reg_manual_title", "reg_manual_url", "reg_manual_content",
+            "reg_url_input", "reg_url_title", "reg_url_content",
+        ]:
+            st.session_state.pop(k, None)
+        show_register_dialog()
+
+# 필터 / 검색
+col_search, col_filter, col_refresh = st.columns([4, 2, 0.7])
+with col_search:
+    keyword = st.text_input("검색", placeholder="문서 검색...", label_visibility="collapsed")
+with col_filter:
+    source_filter = st.selectbox(
+        "출처 필터",
+        ["전체", "FAQ", "admin", "eluocnc"],
+        format_func=lambda x: "전체" if x == "전체" else SOURCE_LABELS.get(x, x),
+        label_visibility="collapsed",
+    )
+with col_refresh:
+    if st.button("🔄", help="새로고침"):
+        st.rerun()
+
+# 필터 변경 감지 → 페이지 리셋
+current_filter_key = f"{source_filter}|{keyword}"
+if st.session_state.get("_last_filter_key") != current_filter_key:
+    st.session_state["_last_filter_key"] = current_filter_key
+    st.session_state["admin_page"] = 0
+
+# Supabase 서버사이드 쿼리
+db_source = _SOURCE_DB_MAP.get(source_filter, source_filter) if source_filter != "전체" else ""
+current_page = st.session_state.get("admin_page", 0)
+offset = current_page * ITEMS_PER_PAGE
+page_docs, total_count = supabase_docs.load_items_page(
+    source=db_source, keyword=keyword,
+    offset=offset, limit=ITEMS_PER_PAGE,
+)
+for item in page_docs:
+    item["_data_path"] = "supabase"
+
+# 통계
+st.markdown(
+    f"<div style='text-align:right; color:#6B7280; font-size:0.88rem; padding:0.2rem 0 0.5rem;'>"
+    f"총 <b>{total_count}</b>개 문서"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+
+if not page_docs and total_count == 0:
+    st.info("조건에 맞는 문서가 없습니다.")
+else:
+    # ── 페이지네이션 계산 ──
+    total_pages = max(1, (total_count + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+    # 삭제 후 페이지 범위 초과 방지
+    if current_page >= total_pages:
+        current_page = total_pages - 1
+        st.session_state["admin_page"] = current_page
+
+    # ── 테이블 헤더 ──
+    st.markdown(
+        '<div class="admin-table-header">'
+        "<span>문서명</span><span>출처</span><span>카테고리</span>"
+        "<span>상태</span><span>작업</span>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── 문서 목록 렌더링 ──
+    for i, doc in enumerate(page_docs):
+        global_idx = offset + i
+        src = doc.get("source", "")
+        src_label = SOURCE_LABELS.get(src, src)
+        title = doc.get("title", "(제목 없음)")
+        url = doc.get("url", "")
+        data_path = doc.get("_data_path", "")
+        category = doc.get("category", "") or "-"
+
+        c_title, c_src, c_cat, c_status, c_del = st.columns([4, 1.5, 1.5, 1, 0.7])
+        with c_title:
+            if st.button(title, key=f"view_{global_idx}_{url}", type="secondary"):
+                st.session_state["_dialog_doc"] = doc
+                st.session_state["_dialog_is_admin"] = src == "admin"
+                show_doc_detail_dialog()
+        with c_src:
+            st.markdown(f'<div class="admin-table-cell">{src_label}</div>', unsafe_allow_html=True)
+        with c_cat:
+            st.markdown(f'<div class="admin-table-cell">{category}</div>', unsafe_allow_html=True)
+        with c_status:
+            st.markdown('<div class="admin-table-cell"><span class="status-badge">활성</span></div>', unsafe_allow_html=True)
+        with c_del:
+            if st.button("삭제", key=f"del_{global_idx}_{url}"):
+                st.session_state[f"confirm_delete_{url}"] = True
+
+        # 삭제 확인
+        if st.session_state.get(f"confirm_delete_{url}"):
+            st.warning(f"'{title}' 문서를 삭제하시겠습니까?")
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("삭제 확인", key=f"yes_del_{global_idx}_{url}", type="primary"):
+                    with st.spinner("삭제 중..."):
+                        # S3에서 이미지 삭제
+                        s3_deleted = 0
+                        if doc.get("attachments"):
+                            try:
+                                from storage.supabase_storage import is_configured, delete_images
+                                import hashlib
+                                if is_configured():
+                                    url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
+                                    s3_deleted = delete_images(f"doc_images/{url_hash}_")
+                            except Exception as e:
+                                st.warning(f"S3 이미지 정리 실패 (문서는 삭제됨): {e}")
+                        # DB/JSON에서 삭제
+                        if data_path == "supabase":
+                            supabase_docs.delete_item(url)
+                        elif data_path:
+                            delete_item(Path(data_path), url)
+                        # Pinecone에서 삭제
+                        vec_deleted = 0
+                        if _pinecone_ok:
+                            vec_deleted = delete_document(url, pinecone_index)
+                    del st.session_state[f"confirm_delete_{url}"]
+                    st.toast(f"'{title}' 삭제 완료 (벡터 {vec_deleted}개)")
+                    st.rerun()
+            with col_no:
+                if st.button("취소", key=f"no_del_{global_idx}_{url}"):
+                    del st.session_state[f"confirm_delete_{url}"]
+                    st.rerun()
+
+    # ── 페이지네이션 컨트롤 ──
+    if total_pages > 1:
+        col_prev, col_info, col_next = st.columns([1, 2, 1])
+        with col_prev:
+            if st.button("⬅️ 이전", disabled=current_page == 0):
+                st.session_state["admin_page"] = current_page - 1
+                st.rerun()
+        with col_info:
+            st.markdown(
+                f"<div style='text-align:center; padding-top:8px;'>"
+                f"{current_page + 1} / {total_pages} 페이지</div>",
+                unsafe_allow_html=True,
+            )
+        with col_next:
+            if st.button("다음 ➡️", disabled=current_page >= total_pages - 1):
+                st.session_state["admin_page"] = current_page + 1
+                st.rerun()
+
+

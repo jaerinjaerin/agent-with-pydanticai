@@ -2,6 +2,7 @@
 (function() {
     var P = window.parent;
     var doc = P.document;
+
     if (P.__scrollLockApplied) return;
     P.__scrollLockApplied = true;
 
@@ -43,4 +44,5 @@
     // 초기 제거
     doc.querySelectorAll('[data-testid="ScrollToBottomContainer"]')
         .forEach(function(el) { el.remove(); });
+
 })();

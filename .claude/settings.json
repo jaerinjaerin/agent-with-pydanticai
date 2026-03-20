@@ -1,5 +1,6 @@
 {
   "enabledPlugins": {
-    "pinecone@claude-plugins-official": true
+    "pinecone@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true
   }
 }

@@ -2,7 +2,7 @@
 단건 문서 인제스트 파이프라인.
 
 어드민 UI에서 문서를 첨부/제출하면 이 모듈이 호출되어
-해당 문서만 청킹 → Supabase upsert를 수행한다.
+해당 문서만 청킹 → Pinecone upsert를 수행한다.
 그래프 업데이트도 포함.
 """
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from graph.supabase_vector import (
+from graph.embedding_index import (
     chunk_text,
     delete_doc_vectors,
     make_doc_id,
@@ -38,24 +38,15 @@ def ingest_images(
     title: str,
     url: str,
     source: str,
-    pinecone_index=None,
-    supabase_client=None,
-    document_id: str = "",
+    pinecone_index,
     descriptions: dict[str, str] | None = None,
     namespace: str = "",
 ) -> int:
-    """이미지 설명을 벡터 DB에 업로드한다.
-
-    Args:
-        pinecone_index: 하위호환용 (무시됨). supabase_client를 사용.
-        supabase_client: Supabase 클라이언트.
-        document_id: documents 테이블의 UUID.
+    """이미지 설명을 Pinecone에 업로드한다. (서버사이드 임베딩)
 
     Returns:
         업로드된 이미지 청크 수.
     """
-    # 하위호환: pinecone_index가 전달되면 supabase_client로 사용
-    client = supabase_client or pinecone_index
     if not image_paths:
         return 0
 
@@ -86,14 +77,12 @@ def ingest_images(
             "image_path": img_path,
             "content_preview": desc[:500],
             "chunk_index": i,
-            "document_id": document_id,
-            "total_chunks": len(image_paths),
         })
 
     if not ids:
         return 0
 
-    upsert_records(client, ids, texts, metadata_list, namespace=namespace)
+    upsert_records(pinecone_index, ids, texts, metadata_list, namespace=namespace)
     return len(ids)
 
 
@@ -102,27 +91,18 @@ def ingest_document(
     content: str,
     source: str,
     url: str,
-    pinecone_index=None,
-    supabase_client=None,
-    document_id: str = "",
+    pinecone_index,
     namespace: str = "",
 ) -> dict:
-    """단일 문서를 청킹 → Supabase에 업로드한다.
+    """단일 문서를 청킹 → Pinecone에 업로드한다. (서버사이드 임베딩)
 
     기존에 같은 URL의 문서가 있으면 삭제 후 재업로드.
-
-    Args:
-        pinecone_index: 하위호환용 (무시됨). supabase_client를 사용.
-        supabase_client: Supabase 클라이언트.
-        document_id: documents 테이블의 UUID.
 
     Returns:
         {"chunks": 청크 수, "deleted": 삭제된 기존 청크 수}
     """
-    client = supabase_client or pinecone_index
-
     # 1) 기존 벡터 삭제 (같은 URL로 이미 등록된 경우)
-    deleted = delete_doc_vectors(client, url, namespace=namespace)
+    deleted = delete_doc_vectors(pinecone_index, url, namespace=namespace)
 
     # 2) 청킹
     full_text = f"{title}\n{content}" if title else content
@@ -138,13 +118,12 @@ def ingest_document(
             "content_preview": chunk[:500],
             "chunk_index": i,
             "total_chunks": len(chunks),
-            "document_id": document_id,
         }
         for i, chunk in enumerate(chunks)
     ]
 
-    # 4) Supabase upsert (Gemini 임베딩)
-    upsert_records(client, ids, chunks, metadata_list, namespace=namespace)
+    # 4) Pinecone upsert (서버사이드 임베딩)
+    upsert_records(pinecone_index, ids, chunks, metadata_list, namespace=namespace)
 
     return {"chunks": len(chunks), "deleted": deleted}
 
@@ -154,9 +133,7 @@ def ingest_document_with_media(
     content: str,
     source: str,
     url: str,
-    pinecone_index=None,
-    supabase_client=None,
-    document_id: str = "",
+    pinecone_index,
     images: list | None = None,
     namespace: str = "",
     progress_callback=None,
@@ -164,17 +141,12 @@ def ingest_document_with_media(
     """텍스트 + 이미지를 포함한 전체 인제스트 파이프라인.
 
     Args:
-        pinecone_index: 하위호환용 (무시됨). supabase_client를 사용.
-        supabase_client: Supabase 클라이언트.
-        document_id: documents 테이블의 UUID.
         images: ExtractionResult.images 리스트 (ExtractedImage 객체들).
         progress_callback: (step: str, detail: str) → None. UI 상태 표시용.
 
     Returns:
         {"chunks": N, "images": M, "deleted": D, "image_urls": [...]}
     """
-    client = supabase_client or pinecone_index
-
     def _progress(step: str, detail: str = ""):
         if progress_callback:
             progress_callback(step, detail)
@@ -182,27 +154,28 @@ def ingest_document_with_media(
     image_urls: list[str] = []
     image_count = 0
 
-    # 1. 이미지 처리 (Supabase Storage 업로드 + 설명 생성 + 벡터화)
+    # 1. 이미지 처리 (S3 업로드 + 설명 생성 + 벡터화)
     if images:
         from storage.supabase_storage import is_configured as storage_configured, upload_image
         from graph.image_describer import describe_image_bytes
 
         if not storage_configured():
-            _progress("storage_skip", "Supabase 환경변수 미설정 — 이미지 건너뜀")
+            _progress("storage_skip", "Supabase Storage 미설정 — 이미지 건너뜀")
         else:
             import hashlib
             import re
             import time
 
             url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
+            # 안전한 prefix 생성
             safe_title = re.sub(r"[^\w가-힣-]", "_", title)[:30]
-            storage_prefix = f"doc_images/{url_hash}_{safe_title}"
+            r2_prefix = f"doc_images/{url_hash}_{safe_title}"
 
-            # 1a. Supabase Storage에 이미지 업로드
+            # 1a. S3에 이미지 업로드
             _progress("image_upload", f"{len(images)}장 업로드 중...")
             for img in images:
                 try:
-                    key = f"{storage_prefix}/{img.filename}"
+                    key = f"{r2_prefix}/{img.filename}"
                     img_url = upload_image(img.data, key)
                     image_urls.append(img_url)
                 except Exception as e:
@@ -228,7 +201,7 @@ def ingest_document_with_media(
                         desc = describe_image_bytes(img.data, media_type=media_type)
                         descriptions[img_url] = desc
                         if (i + 1) % 3 == 0:
-                            time.sleep(0.5)
+                            time.sleep(0.5)  # API 속도 제한
                     except Exception as e:
                         print(f"  [warn] 이미지 설명 생성 실패 ({img.filename}): {e}")
                         descriptions[img_url] = ""
@@ -242,22 +215,20 @@ def ingest_document_with_media(
                     title=title,
                     url=url,
                     source=source,
-                    supabase_client=client,
-                    document_id=document_id,
+                    pinecone_index=pinecone_index,
                     descriptions=descriptions,
                     namespace=namespace,
                 )
                 _progress("image_vectorize_done", f"{image_count}개 이미지 벡터 업로드")
 
-    # 2. 텍스트 인제스트
+    # 2. 텍스트 인제스트 (기존 로직)
     _progress("text_ingest", "텍스트 벡터화 중...")
     result = ingest_document(
         title=title,
         content=content,
         source=source,
         url=url,
-        supabase_client=client,
-        document_id=document_id,
+        pinecone_index=pinecone_index,
         namespace=namespace,
     )
     _progress("text_ingest_done", f"{result['chunks']}개 텍스트 청크 업로드")
@@ -270,7 +241,6 @@ def ingest_document_with_media(
     }
 
 
-def delete_document(url: str, pinecone_index=None, supabase_client=None, namespace: str = "") -> int:
-    """문서를 벡터 DB에서 삭제한다. 삭제된 벡터 수를 반환."""
-    client = supabase_client or pinecone_index
-    return delete_doc_vectors(client, url, namespace=namespace)
+def delete_document(url: str, pinecone_index, namespace: str = "") -> int:
+    """문서를 Pinecone에서 삭제한다. 삭제된 벡터 수를 반환."""
+    return delete_doc_vectors(pinecone_index, url, namespace=namespace)

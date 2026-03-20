@@ -25,6 +25,67 @@ HEADERS = {
 MIN_CONTENT_LENGTH = 100
 
 
+def _is_notion_url(url: str) -> bool:
+    """Notion 도메인 여부를 판별한다."""
+    host = urlparse(url).hostname or ""
+    return host.endswith("notion.so") or host.endswith("notion.site")
+
+
+def _detect_encoding(resp: requests.Response) -> str:
+    """HTTP 응답의 인코딩을 정확하게 감지한다.
+
+    우선순위:
+    1. HTTP Content-Type charset (ISO-8859-1은 requests 기본값이므로 무시)
+    2. HTML <meta charset> / <meta http-equiv> 태그
+    3. UTF-8 BOM
+    4. UTF-8 strict 디코딩 시도
+    5. CP949 디코딩 시도
+    6. apparent_encoding 폴백
+    """
+    raw = resp.content
+
+    # 1) HTTP Content-Type charset (ISO-8859-1은 requests가 붙인 기본값이므로 무시)
+    ct_charset = resp.encoding
+    if ct_charset and ct_charset.lower() not in ("iso-8859-1", "latin-1", "latin1"):
+        return ct_charset
+
+    # 2) HTML meta 태그에서 charset 추출
+    # raw bytes의 앞부분만 검사 (성능)
+    head = raw[:4096]
+    meta_match = re.search(
+        rb'<meta[^>]+charset=["\']?\s*([a-zA-Z0-9_-]+)', head, re.IGNORECASE
+    )
+    if not meta_match:
+        meta_match = re.search(
+            rb'<meta[^>]+http-equiv=["\']?Content-Type["\']?[^>]+content=["\']?[^"\']*charset=([a-zA-Z0-9_-]+)',
+            head,
+            re.IGNORECASE,
+        )
+    if meta_match:
+        return meta_match.group(1).decode("ascii", errors="ignore")
+
+    # 3) UTF-8 BOM
+    if raw[:3] == b"\xef\xbb\xbf":
+        return "utf-8-sig"
+
+    # 4) UTF-8 strict 디코딩 시도
+    try:
+        raw.decode("utf-8", errors="strict")
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+
+    # 5) CP949 (EUC-KR 상위호환) 시도
+    try:
+        raw.decode("cp949", errors="strict")
+        return "cp949"
+    except UnicodeDecodeError:
+        pass
+
+    # 6) 최후 수단
+    return resp.apparent_encoding or "utf-8"
+
+
 def validate_url(url: str) -> str:
     """URL 유효성 검증 및 정규화. 스킴이 없으면 https:// 추가."""
     url = url.strip()
@@ -82,12 +143,16 @@ def _extract_from_soup(soup: BeautifulSoup, url: str) -> dict:
             break
 
     # 불필요한 요소 제거
-    for tag in soup.select("script, style, nav, header, footer"):
+    for tag in soup.select(
+        "script, style, nav, header, footer, "
+        ".notion-topbar, .notion-sidebar"
+    ):
         tag.decompose()
 
     # 본문 영역 셀렉터 탐색
     content = ""
     content_tag = soup.select_one(
+        ".notion-page-content, .super-content, .layout-content, "
         ".contents, .content-wrap, .sub-content, .page-content, "
         "main, article, #content, .container .content, .post-content, "
         ".entry-content, .article-body"
@@ -111,10 +176,7 @@ def _scrape_html_static(url: str) -> dict | None:
         return None
 
     # 인코딩 자동 감지
-    if resp.encoding and "euc" in resp.encoding.lower():
-        resp.encoding = "euc-kr"
-    elif resp.apparent_encoding:
-        resp.encoding = resp.apparent_encoding
+    resp.encoding = _detect_encoding(resp)
 
     soup = BeautifulSoup(resp.text, "lxml")
     return _extract_from_soup(soup, url)
@@ -128,10 +190,24 @@ def _scrape_html_playwright(url: str) -> dict | None:
         return None
 
     try:
+        notion = _is_notion_url(url)
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
-            page.goto(url, wait_until="networkidle", timeout=30000)
+
+            if notion:
+                # Notion은 지속적 네트워크 요청으로 networkidle 타임아웃 발생
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                try:
+                    page.wait_for_selector(
+                        ".notion-page-content, .notion-selectable, .super-content",
+                        timeout=15000,
+                    )
+                except Exception:
+                    page.wait_for_timeout(5000)
+            else:
+                page.goto(url, wait_until="networkidle", timeout=30000)
+
             html = page.content()
             browser.close()
     except Exception:

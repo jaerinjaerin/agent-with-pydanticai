@@ -68,6 +68,29 @@
     var innerContainer = btnWrapper ? btnWrapper.parentElement : null;
     if (!innerContainer) return;
 
+    // Submit 시 미리보기 즉시 제거 (rerun 전에 DOM에서 삭제)
+    function _clearPreviewNow() {
+      var p = chatInput.querySelector('.receipt-preview');
+      if (p) p.remove();
+      var d = doc.getElementById('receipt-preview-data');
+      if (d) d.remove();
+    }
+
+    if (btn && !btn._eluoSubmitHooked) {
+      btn._eluoSubmitHooked = true;
+      btn.addEventListener('click', _clearPreviewNow);
+    }
+
+    var ta = chatInput.querySelector('textarea');
+    if (ta && !ta._eluoSubmitHooked) {
+      ta._eluoSubmitHooked = true;
+      ta.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          _clearPreviewNow();
+        }
+      });
+    }
+
     // + 버튼 생성 (1회)
     if (!innerContainer.querySelector('.receipt-upload-btn')) {
       var uploadBtn = doc.createElement('button');
@@ -80,16 +103,20 @@
         var fileInput = doc.querySelector(
           '[data-testid="stFileUploader"] input[type="file"]'
         );
-        if (fileInput) fileInput.click();
+        if (fileInput) {
+          // 같은 파일 재선택 시에도 change 이벤트 발생하도록 초기화
+          fileInput.value = '';
+          fileInput.click();
+        }
       });
       innerContainer.insertBefore(uploadBtn, innerContainer.firstChild);
     }
 
-    // 미리보기 썸네일 + 파일명 badge 감시
-    var uploadBtnEl = innerContainer.querySelector('.receipt-upload-btn');
+    // 미리보기 카드를 chatInput 위쪽에 배치
     var previewData = doc.getElementById('receipt-preview-data');
-    var preview = innerContainer.querySelector('.receipt-preview');
-    var badge = innerContainer.querySelector('.receipt-file-badge');
+    // outerContainer = chatInput > div:has(textarea) (CSS 기준점)
+    var outerContainer = chatInput.querySelector(':scope > div:first-child');
+    var preview = chatInput.querySelector('.receipt-preview');
 
     if (previewData && previewData.dataset.src) {
       // 미리보기 컨테이너가 없으면 생성
@@ -101,10 +128,6 @@
         thumb.className = 'receipt-preview-img';
         preview.appendChild(thumb);
 
-        var nameSpan = doc.createElement('span');
-        nameSpan.className = 'receipt-preview-name';
-        preview.appendChild(nameSpan);
-
         var removeBtn = doc.createElement('button');
         removeBtn.className = 'receipt-preview-remove';
         removeBtn.type = 'button';
@@ -112,49 +135,43 @@
         removeBtn.title = '\uc601\uc218\uc99d \uc81c\uac70';
         removeBtn.addEventListener('click', function(e) {
           e.preventDefault();
-          // Streamlit file_uploader의 삭제 버튼 클릭
-          var delBtn = doc.querySelector('[data-testid="stFileUploader"] button[aria-label]');
-          if (delBtn) delBtn.click();
-          // 미리보기 즉시 제거
-          var p = innerContainer.querySelector('.receipt-preview');
-          if (p) p.remove();
-          var b = innerContainer.querySelector('.receipt-file-badge');
-          if (b) b.remove();
+          e.stopPropagation();
+          // 1. Streamlit file_uploader의 삭제 버튼 클릭
+          var uploaderBtns = doc.querySelectorAll('[data-testid="stFileUploader"] button');
+          for (var j = 0; j < uploaderBtns.length; j++) {
+            if (uploaderBtns[j].getAttribute('aria-label')) {
+              uploaderBtns[j].click();
+              break;
+            }
+          }
+          // 2. file input value 초기화 (재첨부 시 change 이벤트 보장)
+          var fi = doc.querySelector('[data-testid="stFileUploader"] input[type="file"]');
+          if (fi) fi.value = '';
+          // 3. receipt-preview-data div 제거
+          var dataDiv = doc.getElementById('receipt-preview-data');
+          if (dataDiv) dataDiv.remove();
+          // 4. 미리보기 DOM 즉시 제거
+          preview.remove();
         });
         preview.appendChild(removeBtn);
 
-        innerContainer.insertBefore(preview, uploadBtnEl ? uploadBtnEl.nextSibling : innerContainer.firstChild);
+        // chatInput의 outerContainer 앞에 삽입 (입력창 위)
+        if (outerContainer) {
+          chatInput.insertBefore(preview, outerContainer);
+        } else {
+          chatInput.insertBefore(preview, chatInput.firstChild);
+        }
       }
 
-      // 이미지/이름 업데이트
+      // 이미지 업데이트
       var img = preview.querySelector('.receipt-preview-img');
       if (img && img.src !== previewData.dataset.src) {
         img.src = previewData.dataset.src;
       }
-      var name = preview.querySelector('.receipt-preview-name');
-      if (name) name.textContent = previewData.dataset.name || '';
 
-      // badge 제거 (미리보기가 대체)
-      if (badge) badge.remove();
     } else {
       // 파일 없음 — 미리보기 제거
       if (preview) preview.remove();
-
-      // 파일명 badge 폴백 (Streamlit 자체 파일명 표시)
-      var uploaderEl = doc.querySelector('[data-testid="stFileUploader"]');
-      if (uploaderEl) {
-        var fileName = uploaderEl.querySelector('[data-testid="stFileUploaderFileName"]');
-        if (fileName && fileName.textContent.trim()) {
-          if (!badge) {
-            badge = doc.createElement('span');
-            badge.className = 'receipt-file-badge';
-            innerContainer.insertBefore(badge, uploadBtnEl ? uploadBtnEl.nextSibling : innerContainer.firstChild);
-          }
-          badge.textContent = '\ud83d\udcce ' + fileName.textContent.trim();
-        } else if (badge) {
-          badge.remove();
-        }
-      }
     }
   }
 
@@ -174,6 +191,50 @@
         break;
       }
     }
+  }
+
+  /**
+   * "새채팅" 트리거 버튼을 찾아 숨기고, 커스텀 버튼을 좌상단에 고정 생성한다.
+   */
+  function handleNewChatButton() {
+    // 숨겨진 Streamlit 버튼 찾기 & 숨기기
+    var triggerBtn = null;
+    var buttons = doc.querySelectorAll('button[kind="secondary"]');
+    for (var i = 0; i < buttons.length; i++) {
+      if (buttons[i].textContent.trim() === '새채팅') {
+        triggerBtn = buttons[i];
+        var el = buttons[i];
+        while (el && (!el.getAttribute || el.getAttribute('data-testid') !== 'stElementContainer')) {
+          el = el.parentElement;
+        }
+        if (el) el.style.display = 'none';
+        break;
+      }
+    }
+
+    // 커스텀 버튼이 이미 있으면 스킵
+    if (doc.querySelector('.new-chat-btn')) return;
+
+    // 커스텀 버튼 생성
+    var btn = doc.createElement('button');
+    btn.className = 'new-chat-btn';
+    btn.type = 'button';
+    btn.innerHTML = '&#x2b; 새채팅';
+    btn.title = '새 대화 시작';
+    btn.addEventListener('click', function(e) {
+      e.preventDefault();
+      // 숨겨진 Streamlit 버튼을 프로그래밍 방식으로 클릭
+      var target = null;
+      var btns = doc.querySelectorAll('button[kind="secondary"]');
+      for (var j = 0; j < btns.length; j++) {
+        if (btns[j].textContent.trim() === '새채팅') {
+          target = btns[j];
+          break;
+        }
+      }
+      if (target) target.click();
+    });
+    doc.body.appendChild(btn);
   }
 
   /**
@@ -207,6 +268,16 @@
     var stopBtn = doc.getElementById('eluo-stop-btn');
 
     if (isStreaming) {
+      // 스트리밍 버블 높이 단조 증가 — 아래 콘텐츠가 위로 점프하지 않도록
+      var lastBubble = doc.querySelector(
+        '[data-testid="stChatMessage"]:last-of-type [data-testid="stChatMessageContent"]'
+      );
+      if (lastBubble) {
+        var h = lastBubble.scrollHeight;
+        var min = parseInt(lastBubble.style.minHeight) || 0;
+        if (h > min) lastBubble.style.minHeight = h + 'px';
+      }
+
       // submit 버튼 숨기기
       if (submitBtn) submitBtn.style.display = 'none';
 
@@ -244,6 +315,10 @@
         }, true);
       }
     } else {
+      // 스트리밍 종료 — 모든 버블의 min-height 초기화
+      var allBubbles = doc.querySelectorAll('[data-testid="stChatMessageContent"]');
+      allBubbles.forEach(function(b) { b.style.minHeight = ''; });
+
       // 정지 버튼 제거
       if (stopBtn) stopBtn.remove();
       // submit 버튼 복원
@@ -263,6 +338,20 @@
     if (payload.getAttribute('data-trigger') && trigger.dataset.handled) return;
     trigger.dataset.handled = 'true';
     payload.setAttribute('data-trigger', Date.now().toString());
+  }
+
+  /**
+   * 웰컴 상태를 감지하여 body 클래스를 토글한다.
+   * #eluo-welcome-state marker가 DOM에 있으면 웰컴 상태.
+   * Python에서 welcome_slot.empty() 호출 시 marker도 제거되어 자동 전환.
+   */
+  function handleWelcomeState() {
+    var isWelcome = !!doc.querySelector('#eluo-welcome-state');
+    if (isWelcome) {
+      doc.body.classList.add('eluo-welcome');
+    } else {
+      doc.body.classList.remove('eluo-welcome');
+    }
   }
 
   /**
@@ -308,22 +397,27 @@
 
   // 초기 실행 + Streamlit 리렌더 감시
   setTimeout(function() {
+    handleWelcomeState();
     integrate();
     handleReceiptButton();
     handleStreamingState();
     handleExpenseTrigger();
+    handleNewChatButton();
     checkExtensionInstalled();
     dismissLoadingOverlay();
   }, 200);
 
   var timer = null;
   var observer = new MutationObserver(function () {
+    // 웰컴 상태는 즉시 반응 (debounce 없이) — 레이아웃 점프 방지
+    handleWelcomeState();
     clearTimeout(timer);
     timer = setTimeout(function() {
       integrate();
       handleReceiptButton();
       handleStreamingState();
       handleExpenseTrigger();
+      handleNewChatButton();
       checkExtensionInstalled();
       dismissLoadingOverlay();
     }, 100);

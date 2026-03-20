@@ -1,10 +1,11 @@
 """
 VectorRAG 데이터베이스.
 
-벡터 검색(Supabase pgvector) 기반 검색을 제공한다.
+벡터 검색(Pinecone) 기반 검색을 제공한다.
 기존 FAQDatabase와 동일한 search() 인터페이스를 유지하여 호환성 보장.
 """
 
+import json
 import os
 import sys
 import time
@@ -20,10 +21,17 @@ load_dotenv()
 # 프로젝트 루트를 sys.path에 추가 (graph 모듈 임포트용)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from graph.supabase_vector import (
-    init_db,
+from graph.embedding_index import (
+    init_pinecone,
     search_records,
+    rerank_results,
+    PINECONE_INDEX_NAME,
 )
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+ELUOCNC_DATA_PATH = DATA_DIR / "eluocnc.json"
+ADMIN_DATA_PATH = DATA_DIR / "admin_documents.json"
+BOARD_DATA_PATH = DATA_DIR / "board_documents.json"
 
 
 @dataclass
@@ -31,59 +39,85 @@ class GraphRAGDatabase:
     """벡터 검색 기반 RAG 데이터베이스."""
 
     items: list[dict] = field(default_factory=list)
-    supabase_client: Any = None
+    pinecone_client: Any = None  # Pinecone 클라이언트 (리랭킹용)
+    pinecone_index: Any = None
     _search_cache: OrderedDict = field(default_factory=OrderedDict, repr=False)
     _cache_max: int = field(default=50, repr=False)
     _cache_ttl: float = field(default=300.0, repr=False)  # 5분
 
-    def load(self) -> "GraphRAGDatabase":
-        """Supabase에서 문서 데이터와 벡터 검색 클라이언트를 로드한다."""
+    def load(self, paths: list[Path] | None = None) -> "GraphRAGDatabase":
+        """JSON 데이터, Pinecone 인덱스를 로드한다."""
+        from storage import supabase_docs
 
-        # ── 1. Supabase에서 문서 로드 ──
-        try:
-            from storage.supabase_client import is_configured
-            if is_configured():
-                from storage.supabase_documents import list_documents
-                self.items = list_documents()
+        # ── 1. 데이터 로드 ──
+        self.items = []
 
-                # 중복/빈 항목 필터링
-                seen_urls: set[str] = set()
-                unique_items = []
-                for item in self.items:
-                    url = item.get("url", "")
-                    content = item.get("content", "").strip()
-                    if len(content) < 50:
-                        continue
-                    if url and url in seen_urls:
-                        continue
-                    if url:
-                        seen_urls.add(url)
-                    unique_items.append(item)
-                self.items = unique_items
+        if supabase_docs.is_configured():
+            # Supabase에서 전체 문서 로드
+            try:
+                all_db_items = supabase_docs.load_items()
+                self.items.extend(all_db_items)
+                print(f"[VectorRAG] Supabase에서 문서 {len(all_db_items)}건 로드")
+            except Exception as e:
+                print(f"[warn] Supabase 문서 로드 실패, JSON 폴백: {e}")
+                self._load_all_json_fallback()
+        else:
+            self._load_all_json_fallback()
 
-                print(f"[VectorRAG] Supabase에서 {len(self.items)}개 문서 로드")
-            else:
-                print("[warn] Supabase 환경변수 미설정")
-        except Exception as e:
-            print(f"[warn] Supabase 문서 로드 실패: {e}")
+        # 중복/빈 항목 필터링
+        seen_urls: set[str] = set()
+        unique_items = []
+        for item in self.items:
+            url = item.get("url", "")
+            content = item.get("content", "").strip()
+            if len(content) < 50:
+                continue
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            unique_items.append(item)
+        self.items = unique_items
 
         if not self.items:
             print("[warn] 로드된 데이터가 비어있습니다.")
 
-        # ── 2. Supabase 클라이언트 연결 (실패 시 None) ──
-        try:
-            from storage.supabase_client import is_configured
-            if is_configured():
-                self.supabase_client = init_db()
-                print("[VectorRAG] Supabase 벡터 검색 연결 완료")
-            else:
-                print("[warn] Supabase 미설정 — 벡터 검색 비활성화")
-                self.supabase_client = None
-        except Exception as e:
-            print(f"[warn] Supabase 연결 실패: {e}")
-            self.supabase_client = None
+        # ── 2. Pinecone 인덱스 연결 (실패 시 None) ──
+        api_key = os.environ.get("PINECONE_API_KEY", "")
+        if api_key:
+            try:
+                from pinecone import Pinecone
+                pc = Pinecone(api_key=api_key)
+                self.pinecone_client = pc
+                self.pinecone_index = pc.Index(PINECONE_INDEX_NAME)
+                print(f"[VectorRAG] Pinecone 인덱스 '{PINECONE_INDEX_NAME}' 연결 완료")
+            except Exception as e:
+                print(f"[warn] Pinecone 연결 실패: {e}")
+                self.pinecone_client = None
+                self.pinecone_index = None
+        else:
+            print("[warn] PINECONE_API_KEY 미설정")
+            self.pinecone_client = None
+            self.pinecone_index = None
 
         return self
+
+    def _load_all_json_fallback(self) -> None:
+        """모든 JSON 데이터 파일에서 아이템을 로드한다 (Supabase 폴백용)."""
+        source_map = {
+            ELUOCNC_DATA_PATH: "eluocnc",
+            ADMIN_DATA_PATH: "admin",
+            BOARD_DATA_PATH: "board",
+        }
+        for path, default_source in source_map.items():
+            if not path.exists():
+                print(f"[warn] 데이터 파일 없음 (건너뜀): {path}")
+                continue
+            with open(path, encoding="utf-8") as f:
+                items = json.load(f)
+            for item in items:
+                item.setdefault("source", default_source)
+            self.items.extend(items)
 
     # ── URL → 원본 아이템 매핑 (이미지 등 추가 정보 조회용) ──
 
@@ -117,28 +151,28 @@ class GraphRAGDatabase:
         self,
         query: str,
         top_k: int = 5,
-        min_score: float = 0.005,
+        min_score: float = 0.2,
         source: str = "",
     ) -> list[dict]:
-        """Supabase 하이브리드 벡터 검색. 같은 URL의 청크는 최고 점수만 유지.
+        """Pinecone 벡터 유사도 검색. 같은 URL의 청크는 최고 점수만 유지.
 
         Args:
-            min_score: 최소 RRF 스코어 임계값.
+            min_score: 최소 유사도 임계값 (이하 결과 제거).
             source: 소스 필터 ("eluocnc", "admin", 또는 "" 전체).
         """
-        if self.supabase_client is None:
+        if self.pinecone_index is None:
             return []
 
         # 소스 필터 구성
-        src_filter = {"source": {"$eq": source}} if source else None
+        pc_filter = {"source": {"$eq": source}} if source else None
 
         # 청크 중복 제거를 위해 더 많이 요청
         raw_results = search_records(
-            self.supabase_client, query, top_k=top_k * 8, filter=src_filter,
+            self.pinecone_index, query, top_k=top_k * 8, filter=pc_filter,
         )
 
         # 같은 URL은 최고 점수 청크만 유지
-        seen_urls: dict[str, int] = {}
+        seen_urls: dict[str, int] = {}  # url → results index
         results = []
         for r in raw_results:
             meta = r.get("metadata", {})
@@ -157,6 +191,7 @@ class GraphRAGDatabase:
                 img_path = meta["image_path"]
                 if img_path not in images:
                     images.insert(0, img_path)
+            # content_preview 키 우선 사용
             content = meta.get("content_preview", meta.get("content", meta.get("text", r.get("content", ""))))[:1500]
             results.append({
                 "title": meta.get("title", r.get("title", "")),
@@ -167,8 +202,22 @@ class GraphRAGDatabase:
                 "images": images,
             })
 
-        # RRF 스코어 필터링
-        results = [r for r in results if r.get("score", 0) >= min_score]
+        # ── 리랭킹 (Pinecone Inference API) ──
+        if self.pinecone_client and results:
+            try:
+                results = rerank_results(
+                    self.pinecone_client, query, results, top_n=top_k * 2,
+                )
+            except Exception as e:
+                print(f"[warn] 리랭킹 실패, cosine 순서 유지: {e}")
+
+        # ── 스코어 필터링 ──
+        # 리랭크 스코어(0~1, 보통 0.001~0.1)와 벡터 스코어(0~1, 보통 0.7~0.8)는 스케일이 다름
+        if results and "rerank_score" in results[0]:
+            rerank_threshold = min(min_score * 0.002, 0.0005)
+            results = [r for r in results if r.get("rerank_score", 0) >= rerank_threshold]
+        else:
+            results = [r for r in results if r.get("score", 0) >= min_score]
 
         return results[:top_k]
 
@@ -218,7 +267,7 @@ class GraphRAGDatabase:
 
     # ── 검색 인터페이스 ──
 
-    def search(self, query: str, top_k: int = 5, min_score: float = 0.005, source: str = "") -> list[dict]:
+    def search(self, query: str, top_k: int = 5, min_score: float = 0.25, source: str = "") -> list[dict]:
         """벡터 검색을 수행한다. 결과 부족 시 키워드 폴백. 캐시 지원."""
         cache_key = (query, top_k, min_score, source)
         if cache_key in self._search_cache:
