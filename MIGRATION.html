@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>프로젝트 마이그레이션 가이드</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* PDF fallback: local Korean fonts */
+  @font-face {
+    font-family: 'LocalKR';
+    src: local('NanumSquare_ac'), local('NanumGothic'), local('Malgun Gothic');
+    font-weight: 400;
+  }
+  @font-face {
+    font-family: 'LocalKR';
+    src: local('NanumSquare_ac Bold'), local('NanumGothic Bold'), local('Malgun Gothic Bold');
+    font-weight: 600;
+  }
+  @font-face {
+    font-family: 'LocalKR';
+    src: local('NanumSquare_ac Bold'), local('NanumGothic Bold'), local('Malgun Gothic Bold');
+    font-weight: 700;
+  }
+</style>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --surface: #ffffff;
+    --border: #e7e5e4;
+    --border-strong: #d6d3d1;
+    --text: #1c1917;
+    --text-muted: #78716c;
+    --text-light: #a8a29e;
+    --accent-manual: #0c4a6e;
+    --accent-manual-bg: #e0f2fe;
+    --accent-manual-border: #7dd3fc;
+    --accent-prompt: #581c87;
+    --accent-prompt-bg: #f3e8ff;
+    --accent-prompt-border: #c084fc;
+    --accent-both-bg: #ecfdf5;
+    --accent-both-border: #6ee7b7;
+    --accent-both: #065f46;
+    --code-bg: #1e1e2e;
+    --code-text: #cdd6f4;
+    --code-keyword: #cba6f7;
+    --code-string: #a6e3a1;
+    --code-comment: #6c7086;
+    --warning-bg: #fef3c7;
+    --warning-border: #fbbf24;
+    --warning-text: #92400e;
+    --step-number: #0369a1;
+    --check-done: #16a34a;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'IBM Plex Sans KR', 'LocalKR', 'NanumSquare_ac', 'NanumGothic', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 60px 24px 100px;
+  }
+
+  /* Header */
+  .page-header {
+    margin-bottom: 48px;
+    padding-bottom: 32px;
+    border-bottom: 2px solid var(--border);
+  }
+
+  .page-header h1 {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 12px;
+    color: var(--text);
+  }
+
+  .page-header .subtitle {
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  /* Step sections */
+  .step {
+    margin-bottom: 48px;
+    position: relative;
+  }
+
+  .step-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .step-number {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--step-number);
+    color: #fff;
+    font-weight: 700;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+
+  .step-title {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+
+  /* Task type badges */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    border: 1.5px solid;
+  }
+
+  .badge-manual {
+    background: var(--accent-manual-bg);
+    color: var(--accent-manual);
+    border-color: var(--accent-manual-border);
+  }
+
+  .badge-prompt {
+    background: var(--accent-prompt-bg);
+    color: var(--accent-prompt);
+    border-color: var(--accent-prompt-border);
+  }
+
+  .badge-both {
+    background: var(--accent-both-bg);
+    color: var(--accent-both);
+    border-color: var(--accent-both-border);
+  }
+
+  .badge::before {
+    font-size: 14px;
+  }
+
+  .badge-manual::before { content: "🖐"; }
+  .badge-prompt::before { content: "🤖"; }
+  .badge-both::before { content: "🔄"; }
+
+  /* Task blocks */
+  .task-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 14px;
+    border-left: 4px solid;
+  }
+
+  .task-block.manual { border-left-color: var(--accent-manual-border); }
+  .task-block.prompt { border-left-color: var(--accent-prompt-border); }
+  .task-block.both { border-left-color: var(--accent-both-border); }
+
+  .task-block .task-label {
+    margin-bottom: 14px;
+  }
+
+  /* Content elements */
+  h4 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 24px 0 10px;
+    color: var(--text);
+  }
+
+  p { margin-bottom: 10px; }
+
+  ol, ul {
+    padding-left: 20px;
+    margin-bottom: 12px;
+  }
+
+  li {
+    margin-bottom: 6px;
+  }
+
+  a {
+    color: var(--step-number);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+
+  a:hover { border-bottom-color: var(--step-number); }
+
+  strong { font-weight: 600; }
+
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    background: #f5f5f4;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #b91c1c;
+  }
+
+  /* Code blocks */
+  pre {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin: 12px 0 14px;
+    overflow-x: auto;
+    position: relative;
+  }
+
+  pre code {
+    background: none;
+    color: var(--code-text);
+    padding: 0;
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .code-lang {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--code-comment);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .prompt-code {
+    background: var(--accent-prompt-bg);
+    border: 1.5px solid var(--accent-prompt-border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 10px 0 8px;
+    font-family: 'IBM Plex Sans KR', 'LocalKR', 'NanumSquare_ac', sans-serif;
+    font-size: 14px;
+    color: var(--accent-prompt);
+    font-weight: 500;
+  }
+
+  .prompt-code::before {
+    content: "💬 ";
+  }
+
+  .result-note {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    padding-left: 4px;
+  }
+
+  .result-note::before {
+    content: "→ ";
+    color: var(--text-light);
+  }
+
+  /* Callout / warning */
+  .callout {
+    background: var(--warning-bg);
+    border: 1px solid var(--warning-border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-size: 13px;
+    color: var(--warning-text);
+    line-height: 1.5;
+  }
+
+  .callout::before {
+    content: "⚠ ";
+    font-size: 14px;
+  }
+
+  .callout.info {
+    background: #eff6ff;
+    border-color: #93c5fd;
+    color: #1e40af;
+  }
+
+  .callout.info::before {
+    content: "ℹ ";
+  }
+
+  /* Images */
+  .screenshot {
+    margin: 14px 0;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+
+  .screenshot img {
+    width: 100%;
+    display: block;
+  }
+
+  /* Config list */
+  .config-list {
+    list-style: none;
+    padding: 0;
+  }
+
+  .config-list li {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .config-list li:last-child { border-bottom: none; }
+
+  .config-key {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    background: #f5f5f4;
+    padding: 2px 8px;
+    border-radius: 4px;
+    color: #b91c1c;
+    white-space: nowrap;
+  }
+
+  .config-arrow {
+    color: var(--text-light);
+    flex-shrink: 0;
+  }
+
+  /* Divider */
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 40px 0;
+  }
+
+  /* Checklist */
+  .checklist-section {
+    margin-top: 48px;
+  }
+
+  .checklist-section h2 {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 20px;
+    letter-spacing: -0.3px;
+  }
+
+  .checklist-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .checklist-table th {
+    text-align: left;
+    padding: 12px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: #f5f5f4;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .checklist-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+
+  .checklist-table tr:last-child td { border-bottom: none; }
+
+  .checklist-table .num {
+    font-weight: 700;
+    color: var(--step-number);
+    width: 36px;
+    text-align: center;
+  }
+
+  .checklist-table .type-cell { width: 120px; }
+  .checklist-table .check-cell {
+    width: 50px;
+    text-align: center;
+  }
+
+  .checkbox-visual {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border-strong);
+    border-radius: 5px;
+    vertical-align: middle;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+  }
+
+  .checkbox-visual:hover {
+    border-color: var(--step-number);
+    background: #f0f9ff;
+  }
+
+  .checkbox-visual.checked {
+    background: var(--check-done);
+    border-color: var(--check-done);
+  }
+
+  .checkbox-visual.checked::after {
+    content: "✓";
+    color: white;
+    font-size: 13px;
+    font-weight: 700;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+  }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    .container { padding: 32px 16px 60px; }
+    .page-header h1 { font-size: 26px; }
+    .step-title { font-size: 17px; }
+    .legend { flex-direction: column; gap: 8px; }
+    pre { padding: 14px 12px; }
+    pre code { font-size: 12px; }
+    .checklist-table { font-size: 13px; }
+    .checklist-table td, .checklist-table th { padding: 10px 10px; }
+  }
+
+  /* Print */
+  @media print {
+    body { font-size: 12px; }
+    .container { max-width: 100%; padding: 20px; }
+    pre { background: #f5f5f5 !important; color: #333 !important; }
+    pre code { color: #333 !important; }
+    .checkbox-visual { border: 2px solid #999; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- Header -->
+  <header class="page-header">
+    <h1>프로젝트 마이그레이션 가이드</h1>
+    <p class="subtitle">이 문서는 프로젝트를 다른 사용자의 GitHub 저장소로 완전히 이전하는 절차를 설명합니다.<br>각 단계는 <strong>직접 해야 할 일</strong>과 <strong>Claude Code(프롬프트)에 요청할 일</strong>로 구분되어 있습니다.</p>
+    <div class="legend">
+      <span class="legend-item"><span class="badge badge-manual">직접 할 일</span></span>
+      <span class="legend-item"><span class="badge badge-prompt">프롬프트 요청</span></span>
+      <span class="legend-item"><span class="badge badge-both">직접 + 프롬프트</span></span>
+    </div>
+  </header>
+
+  <!-- Step 1 -->
+  <section class="step">
+    <div class="step-header">
+      <span class="step-number">1</span>
+      <span class="step-title">Git 저장소 이전</span>
+    </div>
+    <div class="task-block manual">
+      <div class="task-label"><span class="badge badge-manual">직접 할 일</span></div>
+      <ol>
+        <li>GitHub에서 빈 repo 생성</li>
+        <li>터미널에서 아래 명령어 실행:</li>
+      </ol>
+      <pre><span class="code-lang">bash</span><code>git clone https://github.com/jaerinjaerin/agent-with-pydanticai.git
+cd agent-with-pydanticai
+git remote remove origin
+git remote add origin https://github.com/&lt;새사용자&gt;/&lt;새repo이름&gt;.git
+git push -u origin main</code></pre>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Step 2 -->
+  <section class="step">
+    <div class="step-header">
+      <span class="step-number">2</span>
+      <span class="step-title">환경변수 발급 및 설정</span>
+    </div>
+    <div class="task-block manual">
+      <div class="task-label"><span class="badge badge-manual">직접 할 일</span></div>
+      <p><code>.env.example</code>을 <code>.env</code>로 복사하고, 아래 순서대로 각 서비스의 API 키를 발급받아 입력합니다.</p>
+
+      <h4>2-1. ANTHROPIC_API_KEY</h4>
+      <ol>
+        <li><a href="https://console.anthropic.com/" target="_blank">Anthropic Console</a> 접속 및 회원가입/로그인</li>
+        <li><strong>API Keys</strong> → <strong>Create Key</strong> → 키 복사</li>
+        <li><code>.env</code>의 <code>ANTHROPIC_API_KEY</code>에 붙여넣기</li>
+      </ol>
+
+      <h4>2-2. PINECONE_API_KEY</h4>
+      <ol>
+        <li><a href="https://app.pinecone.io/" target="_blank">Pinecone Console</a> 접속 및 회원가입/로그인</li>
+        <li>프로젝트 선택 → 좌측 <strong>API Keys</strong> 클릭</li>
+        <li><strong>+ API key</strong> 클릭 → 이름 입력 → <strong>Create key</strong> 클릭</li>
+        <li>키를 즉시 복사하여 <code>.env</code>에 저장</li>
+      </ol>
+      <div class="screenshot">
+        <img src="docs/images/pinecone-api-key.png" alt="Pinecone API Key 발급 화면">
+      </div>
+      <div class="callout">생성 창을 닫으면 키를 다시 확인할 수 없으므로 반드시 바로 복사할 것.</div>
+
+      <h4>2-3. Supabase 프로젝트 생성 및 키 발급</h4>
+      <ol>
+        <li><a href="https://supabase.com/" target="_blank">Supabase</a> 접속 및 회원가입/로그인</li>
+        <li>Dashboard에서 <strong>New Project</strong> 클릭</li>
+        <li>Organization 선택 → 프로젝트 이름, DB 비밀번호, Region 설정 → <strong>Create new project</strong></li>
+        <li>프로젝트 생성 완료 후 URL 클릭</li>
+      </ol>
+      <div class="screenshot">
+        <img src="docs/images/supabase-api-key.png" alt="Supabase Project URL">
+      </div>
+      <p>아래 두 값을 <code>.env</code>에 복사:</p>
+      <ul class="config-list">
+        <li><span class="config-key">Project URL</span> <span class="config-arrow">→</span> <code>NEXT_PUBLIC_SUPABASE_URL</code></li>
+        <li><span class="config-key">anon / public</span> <span class="config-arrow">→</span> <code>NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY</code></li>
+      </ul>
+
+      <h4>2-4. GEMINI_API_KEY (선택)</h4>
+      <div class="callout info">Gemini 임베딩은 Supabase 벡터 검색(대체 백엔드)에서만 사용됩니다. 주 검색(Pinecone)만 사용할 경우 발급하지 않아도 됩니다.</div>
+      <ol>
+        <li><a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio — API Keys</a> 접속 및 Google 계정 로그인</li>
+        <li>최초 접속 시 이용약관 동의 → 기본 API 키가 자동 생성됨</li>
+        <li>키를 복사하여 <code>.env</code>의 <code>GEMINI_API_KEY</code>에 저장</li>
+      </ol>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Step 3 -->
+  <section class="step">
+    <div class="step-header">
+      <span class="step-number">3</span>
+      <span class="step-title">의존성 설치</span>
+    </div>
+    <div class="task-block prompt">
+      <div class="task-label"><span class="badge badge-prompt">프롬프트 요청</span></div>
+      <div class="prompt-code">pip install -r requirements.txt 실행해줘</div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Step 4 -->
+  <section class="step">
+    <div class="step-header">
+      <span class="step-number">4</span>
+      <span class="step-title">Claude Code에 Supabase MCP 연결</span>
+    </div>
+    <div class="task-block manual">
+      <div class="task-label"><span class="badge badge-manual">직접 할 일</span></div>
+      <ol>
+        <li><a href="https://supabase.com/docs/guides/getting-started/mcp" target="_blank">Supabase MCP 문서</a> 이동</li>
+      </ol>
+      <div class="screenshot">
+        <img src="docs/images/supabase-mcp.png" alt="Supabase MCP">
+      </div>
+      <ol start="2">
+        <li>Installation 내용대로 Claude Code에 MCP 서버 추가</li>
+      </ol>
+    </div>
+    <div class="task-block prompt">
+      <div class="task-label"><span class="badge badge-prompt">프롬프트 요청</span></div>
+      <div class="prompt-code">데이터베이스 테이블 목록을 보여줘</div>
+      <p class="result-note">연결이 정상이면 테이블 목록이 표시됩니다.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Step 5 -->
+  <section class="step">
+    <div class="step-header">
+      <span class="step-number">5</span>
+      <span class="step-title">Supabase DB 스키마 적용 + 데이터 입력</span>
+    </div>
+    <p style="margin-bottom:16px; color: var(--text-muted);">두 가지 방법 중 택 1:</p>
+
+    <h4 style="margin-top:0;">방법 A: backup.sql로 한번에 복원 (권장)</h4>
+    <div class="task-block manual">
+      <div class="task-label"><span class="badge badge-manual">직접 할 일</span></div>
+      <ol>
+        <li>Supabase Dashboard → <strong>Connect</strong> 클릭</li>
+        <li><strong>Direct</strong> → Connection Method: <strong>Session pooler</strong> 선택</li>
+      </ol>
+      <div class="screenshot">
+        <img src="docs/images/supabase-session-pooler.png" alt="Session Pooler 설정">
+      </div>
+      <ol start="3">
+        <li>Connection string (URI)을 복사</li>
+      </ol>
+      <div class="screenshot">
+        <img src="docs/images/supabase-connection-string.png" alt="Connection String 확인">
+      </div>
+      <ol start="4">
+        <li>터미널에서 아래 명령어 실행 (URI의 <code>[YOUR-PASSWORD]</code>를 DB 비밀번호로 교체):</li>
+      </ol>
+      <pre><span class="code-lang">bash</span><code>psql <span style="color:#a6e3a1">"postgresql://postgres.&lt;project-ref&gt;:&lt;비밀번호&gt;@aws-0-&lt;region&gt;.pooler.supabase.com:5432/postgres"</span> &lt; backup.sql</code></pre>
+      <div class="callout info"><code>backup.sql</code>에 스키마 + 문서 데이터가 모두 포함되어 있습니다.</div>
+    </div>
+
+    <h4>방법 B: MCP로 단계별 적용 (psql 없을 때)</h4>
+    <div class="task-block prompt">
+      <div class="task-label"><span class="badge badge-prompt">프롬프트 요청</span></div>
+      <div class="prompt-code">supabase/migrations/001_init.sql 파일을 실행해줘</div>
+      <p class="result-note">테이블 4개, 인덱스, hybrid_search RPC 함수가 생성됩니다.</p>
+      <p style="margin-top:16px;">그 다음:</p>
+      <div class="prompt-code">python scripts/migrate_to_supabase.py 실행해줘</div>
+      <p class="result-note"><code>data/</code> 폴더의 JSON 파일이 Supabase <code>documents</code> 테이블에 입력됩니다.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Step 6 -->
+  <section class="step">
+    <div class="step-header">
+      <span class="step-number">6</span>
+      <span class="step-title">Supabase Storage 이미지 복원</span>
+    </div>
+    <div class="task-block manual">
+      <div class="task-label"><span class="badge badge-manual">직접 할 일</span></div>
+      <ol>
+        <li>Supabase Dashboard → <strong>Storage</strong> → <strong>New Bucket</strong></li>
+        <li>이름: <code>doc-images</code>, Public bucket: <strong>ON</strong></li>
+      </ol>
+    </div>
+    <div class="task-block prompt">
+      <div class="task-label"><span class="badge badge-prompt">프롬프트 요청</span></div>
+      <div class="prompt-code">data/storage_backup/doc-images 폴더의 파일들을 Supabase Storage doc-images 버킷에 업로드해줘</div>
+      <p class="result-note">게시판 인라인 이미지 23개가 업로드됩니다.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Step 7 -->
+  <section class="step">
+    <div class="step-header">
+      <span class="step-number">7</span>
+      <span class="step-title">Pinecone 인덱스 생성 및 데이터 복원</span>
+    </div>
+    <div class="task-block manual">
+      <div class="task-label"><span class="badge badge-manual">직접 할 일</span></div>
+      <p>Pinecone Console에서 Integrated Index 생성:</p>
+      <ul>
+        <li><strong>Create Index</strong> 클릭</li>
+        <li>Index name: <code>eluocnc-faq-v2</code></li>
+        <li>Setup: <strong>Integrated</strong> 선택</li>
+        <li>Embedding model: <code>multilingual-e5-large</code></li>
+        <li>Cloud: <code>aws</code>, Region: <code>us-east-1</code></li>
+      </ul>
+    </div>
+    <div class="task-block prompt">
+      <div class="task-label"><span class="badge badge-prompt">프롬프트 요청</span></div>
+      <div class="prompt-code">data/pinecone_export.json 데이터를 Pinecone eluocnc-faq-v2 인덱스에 업로드해줘</div>
+      <p style="margin-top:14px; color: var(--text-muted); font-size:13px;">또는 아래 스크립트를 직접 실행:</p>
+      <pre><span class="code-lang">python</span><code><span style="color:#cba6f7">import</span> json
+<span style="color:#cba6f7">from</span> pinecone <span style="color:#cba6f7">import</span> Pinecone
+
+pc = Pinecone(api_key=<span style="color:#a6e3a1">"&lt;새-PINECONE_API_KEY&gt;"</span>)
+index = pc.Index(<span style="color:#a6e3a1">"eluocnc-faq-v2"</span>)
+
+<span style="color:#cba6f7">with</span> open(<span style="color:#a6e3a1">"data/pinecone_export.json"</span>, <span style="color:#a6e3a1">"r"</span>) <span style="color:#cba6f7">as</span> f:
+    records = json.load(f)
+
+batch_size = <span style="color:#fab387">100</span>
+<span style="color:#cba6f7">for</span> i <span style="color:#cba6f7">in</span> range(<span style="color:#fab387">0</span>, len(records), batch_size):
+    batch = records[i:i+batch_size]
+    index.upsert_records(
+        namespace=<span style="color:#a6e3a1">"__default__"</span>,
+        records=[{<span style="color:#a6e3a1">"_id"</span>: r[<span style="color:#a6e3a1">"id"</span>], **r[<span style="color:#a6e3a1">"metadata"</span>]} <span style="color:#cba6f7">for</span> r <span style="color:#cba6f7">in</span> batch]
+    )
+    print(<span style="color:#a6e3a1">f"Uploaded <span style="color:#fab387">{min(i+batch_size, len(records))}</span>/<span style="color:#fab387">{len(records)}</span>"</span>)
+
+print(<span style="color:#a6e3a1">"Done!"</span>)</code></pre>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Step 8 -->
+  <section class="step">
+    <div class="step-header">
+      <span class="step-number">8</span>
+      <span class="step-title">Streamlit Cloud 배포</span>
+    </div>
+    <div class="task-block manual">
+      <div class="task-label"><span class="badge badge-manual">직접 할 일</span></div>
+      <ol>
+        <li><a href="https://share.streamlit.io/" target="_blank">Streamlit Cloud</a>에서 로그인 (GitHub 계정)</li>
+        <li><strong>New app</strong> → GitHub repo 연결</li>
+        <li>Main file: <code>src/app.py</code></li>
+        <li><strong>Advanced settings → Secrets</strong>에 환경변수 추가</li>
+      </ol>
+      <div class="callout">TOML 형식이므로 값을 반드시 따옴표로 감쌀 것!</div>
+      <pre><span class="code-lang">toml</span><code><span style="color:#89b4fa">ANTHROPIC_API_KEY</span> = <span style="color:#a6e3a1">"sk-ant-..."</span>
+<span style="color:#89b4fa">PINECONE_API_KEY</span> = <span style="color:#a6e3a1">"pcsk_..."</span>
+<span style="color:#89b4fa">GEMINI_API_KEY</span> = <span style="color:#a6e3a1">"AI..."</span>
+<span style="color:#89b4fa">NEXT_PUBLIC_SUPABASE_URL</span> = <span style="color:#a6e3a1">"https://xxxx.supabase.co"</span>
+<span style="color:#89b4fa">NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY</span> = <span style="color:#a6e3a1">"eyJ..."</span></code></pre>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Step 9 -->
+  <section class="step">
+    <div class="step-header">
+      <span class="step-number">9</span>
+      <span class="step-title">동작 확인</span>
+    </div>
+    <div class="task-block manual">
+      <div class="task-label"><span class="badge badge-manual">직접 할 일</span></div>
+      <pre><span class="code-lang">bash</span><code><span style="color:#6c7086"># 로컬 테스트</span>
+streamlit run src/app.py</code></pre>
+      <p>또는 Streamlit Cloud 배포 URL에서 채팅 테스트.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Checklist -->
+  <section class="checklist-section">
+    <h2>체크리스트</h2>
+    <table class="checklist-table">
+      <thead>
+        <tr>
+          <th class="num">#</th>
+          <th>작업</th>
+          <th class="type-cell">유형</th>
+          <th class="check-cell">완료</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="num">1</td>
+          <td>GitHub에 빈 repo 생성 + push</td>
+          <td><span class="badge badge-manual">직접</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+        <tr>
+          <td class="num">2</td>
+          <td><code>.env</code> 파일에 모든 API 키 설정</td>
+          <td><span class="badge badge-manual">직접</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+        <tr>
+          <td class="num">3</td>
+          <td><code>pip install -r requirements.txt</code></td>
+          <td><span class="badge badge-prompt">프롬프트</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+        <tr>
+          <td class="num">4</td>
+          <td>Supabase MCP 연결 확인</td>
+          <td><span class="badge badge-both">직접+프롬프트</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+        <tr>
+          <td class="num">5</td>
+          <td>Supabase DB 스키마 적용 (<code>001_init.sql</code>)</td>
+          <td><span class="badge badge-prompt">프롬프트</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+        <tr>
+          <td class="num">6</td>
+          <td>Supabase 문서 데이터 입력 (<code>migrate_to_supabase.py</code>)</td>
+          <td><span class="badge badge-prompt">프롬프트</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+        <tr>
+          <td class="num">7</td>
+          <td>Supabase Storage <code>doc-images</code> 버킷 생성 + 이미지 업로드</td>
+          <td><span class="badge badge-both">직접+프롬프트</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+        <tr>
+          <td class="num">8</td>
+          <td>Pinecone Index 생성 (Console)</td>
+          <td><span class="badge badge-manual">직접</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+        <tr>
+          <td class="num">9</td>
+          <td>Pinecone 데이터 업로드 (<code>pinecone_export.json</code>)</td>
+          <td><span class="badge badge-prompt">프롬프트</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+        <tr>
+          <td class="num">10</td>
+          <td>Streamlit Cloud 배포 + Secrets 설정</td>
+          <td><span class="badge badge-manual">직접</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+        <tr>
+          <td class="num">11</td>
+          <td>챗봇 정상 동작 확인</td>
+          <td><span class="badge badge-manual">직접</span></td>
+          <td class="check-cell"><span class="checkbox-visual" onclick="this.classList.toggle('checked')"></span></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+</div>
+
+</body>
+</html>
